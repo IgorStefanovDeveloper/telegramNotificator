@@ -14,9 +14,12 @@ venv/
 env/
 ENV/
 
+# Database (local dev)
 *.db
 *.sqlite
 *.sqlite3
+
+# Workspace
 *.code-workspace
 
 # IDE

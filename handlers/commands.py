@@ -1,0 +1,115 @@
+"""Command handlers: /start, /help, /new, /list, /settings."""
+from aiogram import Router, F
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+
+from config import DEFAULT_TIMEZONE
+from database.db import get_db
+from database.events_repo import get_or_create_user, get_user_settings, get_user_events_upcoming
+from database.models import RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
+from i18n import t
+from keyboards import main_menu, settings_kb
+
+router = Router()
+
+
+def _recurrence_text(lang: str, rec_type: str, rec_value: str) -> str:
+    if rec_type == RECURRENCE_NONE:
+        return t(lang, "recurrence_once")
+    if rec_type == RECURRENCE_WEEKLY and rec_value:
+        days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        try:
+            idx = int(rec_value)
+            day = t(lang, days[idx])
+            return t(lang, "recurrence_weekly", day=day)
+        except (ValueError, IndexError):
+            pass
+    if rec_type == RECURRENCE_MONTHLY and rec_value:
+        return t(lang, "recurrence_monthly", day=rec_value)
+    return t(lang, "recurrence_once")
+
+
+def _format_datetime(dt, timezone_str: str = DEFAULT_TIMEZONE) -> str:
+    try:
+        import pytz
+        tz = pytz.timezone(timezone_str)
+        if dt.tzinfo is None:
+            dt = tz.localize(dt)
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return dt.strftime("%d.%m.%Y %H:%M") if hasattr(dt, 'strftime') else str(dt)
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message):
+    user_id = message.from_user.id
+    conn = await get_db()
+    try:
+        await get_or_create_user(conn, user_id)
+        lang, _ = await get_user_settings(conn, user_id) or (None, None)
+        lang = lang or "ru"
+        await message.answer(
+            t(lang, "welcome"),
+            reply_markup=main_menu(lang),
+            parse_mode="HTML",
+        )
+    finally:
+        await conn.close()
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    conn = await get_db()
+    try:
+        lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", None)
+        await message.answer(t(lang, "help"), parse_mode="HTML")
+    finally:
+        await conn.close()
+
+
+@router.message(Command("settings"), F.text)
+@router.message(F.text.in_({"⚙️ Настройки", "⚙️ Settings"}))
+async def cmd_settings(message: Message, state: FSMContext):
+    await state.clear()
+    conn = await get_db()
+    try:
+        await get_or_create_user(conn, message.from_user.id)
+        lang, tz = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        lang_display = "Русский" if lang == "ru" else "English"
+        tz_short = tz.split("/")[-1].replace("_", " ")
+        await message.answer(
+            t(lang, "settings", language=lang_display, timezone=tz_short),
+            reply_markup=settings_kb(lang),
+            parse_mode="HTML",
+        )
+    finally:
+        await conn.close()
+
+
+@router.message(Command("list"), F.text)
+@router.message(F.text.in_({"📅 Список событий", "📅 List events"}))
+async def cmd_list(message: Message, state: FSMContext):
+    from datetime import datetime, timedelta
+    from config import MAX_FUTURE_MONTHS
+
+    await state.clear()
+    conn = await get_db()
+    try:
+        user_db_id = await get_or_create_user(conn, message.from_user.id)
+        lang, tz = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        now = datetime.now()
+        to_dt = now + timedelta(days=30 * MAX_FUTURE_MONTHS)
+        events = await get_user_events_upcoming(conn, user_db_id, now, to_dt)
+        if not events:
+            await message.answer(t(lang, "list_empty"), parse_mode="HTML")
+            return
+        lines = []
+        for ev in events:
+            dt_str = _format_datetime(ev.event_datetime, ev.timezone)
+            rec_line = _recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or "")
+            lines.append(t(lang, "event_item", title=ev.title, datetime=dt_str, recurrence_line=rec_line))
+        text = t(lang, "list_upcoming", events="\n".join(lines))
+        await message.answer(text, parse_mode="HTML")
+    finally:
+        await conn.close()
