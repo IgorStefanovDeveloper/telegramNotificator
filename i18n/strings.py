@@ -6,7 +6,7 @@ TEXTS = {
                    "• Добавляй события с датой и временем\n"
                    "• Получай уведомления вовремя\n"
                    "• События могут повторяться ежемесячно или еженедельно\n"
-                   "• Просматривай грядущие события на 3 месяца вперёд\n\n"
+                   "• Просматривай грядущие события (до 2 лет)\n\n"
                    "Нажми /help для списка команд.",
         "help": "📋 <b>Команды</b>\n\n"
                 "/new — добавить событие\n"
@@ -32,9 +32,11 @@ TEXTS = {
         "recurrence_once": "Повтор: один раз",
         "recurrence_weekly": "Повтор: каждый {day}",
         "recurrence_monthly": "Повтор: каждый месяц, {day}-е число",
-        "list_upcoming": "📅 <b>Грядущие события</b> (на 3 месяца):\n\n{events}",
+        "list_upcoming": "📅 <b>Грядущие события</b> (до 2 лет):\n\n{events}",
         "list_empty": "Нет запланированных событий.\n\nДобавь новое: /new",
         "event_item": "• {title} — {datetime}\n  {recurrence_line}",
+        "event_item_recurring_weekly": "• Каждый {day} — {title} — {datetime}",
+        "event_item_recurring_monthly": "• Каждое {day} число месяца — {title} — {datetime}",
         "event_actions": "Действия с событием",
         "btn_done": "✅ Выполнено",
         "btn_postpone": "⏰ Отложить на час",
@@ -66,7 +68,7 @@ TEXTS = {
                    "• Add events with date and time\n"
                    "• Get notifications on time\n"
                    "• Events can repeat monthly or weekly\n"
-                   "• View upcoming events for the next 3 months\n\n"
+                   "• View upcoming events (up to 2 years)\n\n"
                    "Press /help for commands.",
         "help": "📋 <b>Commands</b>\n\n"
                 "/new — add event\n"
@@ -92,9 +94,11 @@ TEXTS = {
         "recurrence_once": "Repeat: once",
         "recurrence_weekly": "Repeat: every {day}",
         "recurrence_monthly": "Repeat: monthly on day {day}",
-        "list_upcoming": "📅 <b>Upcoming events</b> (next 3 months):\n\n{events}",
+        "list_upcoming": "📅 <b>Upcoming events</b> (up to 2 years):\n\n{events}",
         "list_empty": "No scheduled events.\n\nAdd new: /new",
         "event_item": "• {title} — {datetime}\n  {recurrence_line}",
+        "event_item_recurring_weekly": "• Every {day} — {title} — {datetime}",
+        "event_item_recurring_monthly": "• Every {day} of the month — {title} — {datetime}",
         "event_actions": "Event actions",
         "btn_done": "✅ Done",
         "btn_postpone": "⏰ Postpone 1 hour",

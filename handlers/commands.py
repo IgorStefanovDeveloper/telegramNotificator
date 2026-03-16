@@ -107,8 +107,18 @@ async def cmd_list(message: Message, state: FSMContext):
         lines = []
         for ev in events:
             dt_str = _format_datetime(ev.event_datetime, ev.timezone)
-            rec_line = _recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or "")
-            lines.append(t(lang, "event_item", title=ev.title, datetime=dt_str, recurrence_line=rec_line))
+            if ev.recurrence_type == RECURRENCE_WEEKLY and ev.recurrence_value:
+                days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+                try:
+                    day = t(lang, days[int(ev.recurrence_value)])
+                    lines.append(t(lang, "event_item_recurring_weekly", day=day, title=ev.title, datetime=dt_str))
+                except (ValueError, IndexError):
+                    lines.append(t(lang, "event_item", title=ev.title, datetime=dt_str, recurrence_line=_recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or "")))
+            elif ev.recurrence_type == RECURRENCE_MONTHLY and ev.recurrence_value:
+                lines.append(t(lang, "event_item_recurring_monthly", day=ev.recurrence_value, title=ev.title, datetime=dt_str))
+            else:
+                rec_line = _recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or "")
+                lines.append(t(lang, "event_item", title=ev.title, datetime=dt_str, recurrence_line=rec_line))
         text = t(lang, "list_upcoming", events="\n".join(lines))
         await message.answer(text, parse_mode="HTML")
     finally:

@@ -117,7 +117,7 @@ async def process_recurrence(cb: CallbackQuery, state: FSMContext):
     lang = data.get("lang", "ru")
 
     if rec_type == "once":
-        await _save_event(cb.message, state, RECURRENCE_NONE, None)
+        await _save_event(cb.message, state, RECURRENCE_NONE, None, telegram_id=cb.from_user.id)
         return
     if rec_type == "weekly":
         await state.set_state(AddEventStates.weekly_day)
@@ -133,7 +133,7 @@ async def process_recurrence(cb: CallbackQuery, state: FSMContext):
 async def process_weekly_day(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     day = cb.data.split(":")[1]
-    await _save_event(cb.message, state, RECURRENCE_WEEKLY, day)
+    await _save_event(cb.message, state, RECURRENCE_WEEKLY, day, telegram_id=cb.from_user.id)
 
 
 @router.message(AddEventStates.monthly_day, F.text)
@@ -143,23 +143,26 @@ async def process_monthly_day(message: Message, state: FSMContext):
     try:
         day = int(message.text.strip())
         if 1 <= day <= 31:
-            await _save_event(message, state, RECURRENCE_MONTHLY, str(day))
+            await _save_event(message, state, RECURRENCE_MONTHLY, str(day), telegram_id=message.from_user.id)
         else:
             await message.answer(t(lang, "invalid_day"))
     except ValueError:
         await message.answer(t(lang, "invalid_day"))
 
 
-async def _save_event(message, state: FSMContext, rec_type: str, rec_value: str | None):
+async def _save_event(message, state: FSMContext, rec_type: str, rec_value: str | None, *, telegram_id: int = None):
     data = await state.get_data()
     lang = data.get("lang", "ru")
     title = data["title"]
     event_datetime = data["event_datetime"]
     timezone = data.get("timezone", DEFAULT_TIMEZONE)
 
+    # CallbackQuery.message has from_user=bot; pass telegram_id explicitly from cb.from_user.id
+    user_telegram_id = telegram_id if telegram_id is not None else message.from_user.id
+
     conn = await get_db()
     try:
-        user_db_id = await get_or_create_user(conn, message.from_user.id)
+        user_db_id = await get_or_create_user(conn, user_telegram_id)
         event_id = await create_event(
             conn,
             user_id=user_db_id,
