@@ -21,6 +21,7 @@ ENV/
 
 # Workspace
 *.code-workspace
+.cursor
 
 # IDE
 .idea/

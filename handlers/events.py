@@ -1,4 +1,5 @@
 """Event creation FSM and handlers."""
+import logging
 from datetime import datetime
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -7,6 +8,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 from aiogram_calendar.schemas import SimpleCalAct
+
+logger = logging.getLogger(__name__)
 
 from config import DEFAULT_TIMEZONE
 from database.db import get_db
@@ -140,20 +143,39 @@ async def process_datetime(message: Message, state: FSMContext):
 
 async def _open_calendar(cb: CallbackQuery, lang: str) -> None:
     """Show calendar inline."""
-    cancel_btn = t(lang, "cancel")
-    today_btn = "Сегодня" if lang == "ru" else "Today"
-    cal = SimpleCalendar(locale="ru_RU" if lang == "ru" else "en_US", cancel_btn=cancel_btn, today_btn=today_btn)
+    cal = _make_calendar(lang)
     await cb.message.edit_reply_markup(reply_markup=await cal.start_calendar())
 
 
-@router.callback_query(AddEventStates.datetime, F.data == "cal:open")
-@router.callback_query(EditEventStates.edit_datetime, F.data == "cal:open")
+@router.callback_query(F.data == "cal:open")
 async def cb_open_calendar(cb: CallbackQuery, state: FSMContext):
     """Show calendar when user clicks the calendar button."""
+    current = await state.get_state()
+    allowed = ("AddEventStates:datetime", "EditEventStates:edit_datetime")
+    if current not in allowed:
+        lang = "ru" if (cb.from_user.language_code or "").startswith("ru") else "en"
+        await cb.answer(t(lang, "cancelled"), show_alert=True)
+        return
     await cb.answer()
     data = await state.get_data()
     lang = data.get("lang", "ru")
-    await _open_calendar(cb, lang)
+    try:
+        await _open_calendar(cb, lang)
+    except Exception as e:
+        logger.exception("Calendar open failed: %s", e)
+        await cb.answer("Ошибка календаря. Введите дату вручную." if lang == "ru" else "Calendar error. Enter date manually.", show_alert=True)
+
+
+def _make_calendar(lang: str):
+    """Create SimpleCalendar with locale fallback."""
+    cancel_btn = t(lang, "cancel")
+    today_btn = "Сегодня" if lang == "ru" else "Today"
+    locale_str = "ru_RU" if lang == "ru" else "en_US"
+    try:
+        return SimpleCalendar(locale=locale_str, cancel_btn=cancel_btn, today_btn=today_btn)
+    except Exception as e:
+        logger.warning("Calendar locale %s failed: %s", locale_str, e)
+        return SimpleCalendar(locale=None, cancel_btn=cancel_btn, today_btn=today_btn)
 
 
 @router.callback_query(AddEventStates.datetime, SimpleCalendarCallback.filter())
@@ -161,9 +183,7 @@ async def cb_calendar_select_add(cb: CallbackQuery, callback_data: SimpleCalenda
     """Process calendar date selection when adding event."""
     data = await state.get_data()
     lang = data.get("lang", "ru")
-    cancel_btn = t(lang, "cancel")
-    today_btn = "Сегодня" if lang == "ru" else "Today"
-    cal = SimpleCalendar(locale="ru_RU" if lang == "ru" else "en_US", cancel_btn=cancel_btn, today_btn=today_btn)
+    cal = _make_calendar(lang)
     selected, date = await cal.process_selection(cb, callback_data)
     if selected and date:
         await state.update_data(calendar_date=date)
@@ -181,9 +201,7 @@ async def cb_calendar_select_edit(cb: CallbackQuery, callback_data: SimpleCalend
     """Process calendar date selection when editing event."""
     data = await state.get_data()
     lang = data.get("lang", "ru")
-    cancel_btn = t(lang, "cancel")
-    today_btn = "Сегодня" if lang == "ru" else "Today"
-    cal = SimpleCalendar(locale="ru_RU" if lang == "ru" else "en_US", cancel_btn=cancel_btn, today_btn=today_btn)
+    cal = _make_calendar(lang)
     selected, date = await cal.process_selection(cb, callback_data)
     if selected and date:
         await state.update_data(calendar_date=date)
