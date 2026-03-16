@@ -10,15 +10,9 @@ from i18n import t
 from keyboards import notification_actions_kb
 
 
-def _format_datetime(dt, timezone_str: str = DEFAULT_TIMEZONE) -> str:
-    try:
-        import pytz
-        tz = pytz.timezone(timezone_str)
-        if dt.tzinfo is None:
-            dt = tz.localize(dt)
-        return dt.strftime("%d.%m.%Y %H:%M")
-    except Exception:
-        return dt.strftime("%d.%m.%Y %H:%M") if hasattr(dt, 'strftime') else str(dt)
+def _format_datetime(dt_utc, timezone_str: str = DEFAULT_TIMEZONE) -> str:
+    from utils_timezone import format_utc_for_display
+    return format_utc_for_display(dt_utc, timezone_str)
 
 
 async def _get_user_lang(user_db_id: int) -> str:
@@ -34,10 +28,12 @@ async def _get_user_lang(user_db_id: int) -> str:
 
 
 async def send_notifications(bot):
-    """Check pending events and send notifications. Called every minute."""
+    """Check pending events and send notifications. Called every minute. Uses UTC."""
+    from utils_timezone import utc_now
+
     conn = await get_db()
     try:
-        now = datetime.now()
+        now = utc_now()
         events_data = await get_events_to_notify(conn, now)
         for telegram_id, user_db_id, event in events_data:
             try:

@@ -5,9 +5,12 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
+from aiogram_calendar.schemas import SimpleCalAct
 
 from config import DEFAULT_TIMEZONE
 from database.db import get_db
+from utils_timezone import format_utc_for_display, local_to_utc, utc_now
 from database.events_repo import (
     get_or_create_user,
     create_event,
@@ -21,6 +24,7 @@ from keyboards import (
     recurrence_kb,
     weekly_days_kb,
     cancel_kb,
+    datetime_calendar_kb,
     edit_field_kb,
     edit_recurrence_kb,
     edit_weekly_days_kb,
@@ -32,6 +36,7 @@ router = Router()
 class AddEventStates(StatesGroup):
     title = State()
     datetime = State()
+    datetime_time = State()  # After calendar date selected, waiting for HH:MM
     recurrence = State()
     weekly_day = State()
     monthly_day = State()
@@ -41,9 +46,27 @@ class EditEventStates(StatesGroup):
     choose_field = State()
     edit_title = State()
     edit_datetime = State()
+    edit_datetime_time = State()  # After calendar date selected
     edit_recurrence = State()
     edit_weekly_day = State()
     edit_monthly_day = State()
+
+
+def _parse_time(text: str) -> tuple[int, int] | None:
+    """Parse HH:MM or H:MM. Returns (hour, minute) or None."""
+    try:
+        text = (text or "").strip()
+        if ":" not in text:
+            return None
+        parts = text.split(":")
+        if len(parts) != 2:
+            return None
+        h, m = int(parts[0]), int(parts[1])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return (h, m)
+        return None
+    except (ValueError, IndexError):
+        return None
 
 
 def _parse_datetime(text: str) -> datetime | None:
@@ -89,7 +112,7 @@ async def process_title(message: Message, state: FSMContext):
     await state.set_state(AddEventStates.datetime)
     await message.answer(
         t(lang, "ask_event_datetime"),
-        reply_markup=cancel_kb(lang),
+        reply_markup=datetime_calendar_kb(lang),
     )
 
 
@@ -98,8 +121,101 @@ async def process_datetime(message: Message, state: FSMContext):
     data = await state.get_data()
     lang = data.get("lang", "ru")
     dt = _parse_datetime(message.text or "")
-    if not dt or dt < datetime.now():
+    if not dt:
         await message.answer(t(lang, "invalid_datetime"))
+        return
+    timezone = data.get("timezone", DEFAULT_TIMEZONE)
+    from utils_timezone import local_to_utc, utc_now
+    dt_utc = local_to_utc(dt, timezone)
+    if dt_utc < utc_now():
+        await message.answer(t(lang, "datetime_past"))
+        return
+    await state.update_data(event_datetime=dt)
+    await state.set_state(AddEventStates.recurrence)
+    await message.answer(
+        t(lang, "ask_recurrence"),
+        reply_markup=recurrence_kb(lang),
+    )
+
+
+async def _open_calendar(cb: CallbackQuery, lang: str) -> None:
+    """Show calendar inline."""
+    cancel_btn = t(lang, "cancel")
+    today_btn = "Сегодня" if lang == "ru" else "Today"
+    cal = SimpleCalendar(locale="ru_RU" if lang == "ru" else "en_US", cancel_btn=cancel_btn, today_btn=today_btn)
+    await cb.message.edit_reply_markup(reply_markup=await cal.start_calendar())
+
+
+@router.callback_query(AddEventStates.datetime, F.data == "cal:open")
+@router.callback_query(EditEventStates.edit_datetime, F.data == "cal:open")
+async def cb_open_calendar(cb: CallbackQuery, state: FSMContext):
+    """Show calendar when user clicks the calendar button."""
+    await cb.answer()
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    await _open_calendar(cb, lang)
+
+
+@router.callback_query(AddEventStates.datetime, SimpleCalendarCallback.filter())
+async def cb_calendar_select_add(cb: CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
+    """Process calendar date selection when adding event."""
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    cancel_btn = t(lang, "cancel")
+    today_btn = "Сегодня" if lang == "ru" else "Today"
+    cal = SimpleCalendar(locale="ru_RU" if lang == "ru" else "en_US", cancel_btn=cancel_btn, today_btn=today_btn)
+    selected, date = await cal.process_selection(cb, callback_data)
+    if selected and date:
+        await state.update_data(calendar_date=date)
+        await state.set_state(AddEventStates.datetime_time)
+        await cb.message.edit_text(
+            t(lang, "ask_event_time"),
+            reply_markup=cancel_kb(lang),
+        )
+    elif callback_data.act == SimpleCalAct.cancel:
+        await cb.message.edit_reply_markup(reply_markup=datetime_calendar_kb(lang))
+
+
+@router.callback_query(EditEventStates.edit_datetime, SimpleCalendarCallback.filter())
+async def cb_calendar_select_edit(cb: CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext):
+    """Process calendar date selection when editing event."""
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    cancel_btn = t(lang, "cancel")
+    today_btn = "Сегодня" if lang == "ru" else "Today"
+    cal = SimpleCalendar(locale="ru_RU" if lang == "ru" else "en_US", cancel_btn=cancel_btn, today_btn=today_btn)
+    selected, date = await cal.process_selection(cb, callback_data)
+    if selected and date:
+        await state.update_data(calendar_date=date)
+        await state.set_state(EditEventStates.edit_datetime_time)
+        await cb.message.edit_text(
+            t(lang, "ask_event_time"),
+            reply_markup=cancel_kb(lang),
+        )
+    elif callback_data.act == SimpleCalAct.cancel:
+        await cb.message.edit_reply_markup(reply_markup=datetime_calendar_kb(lang))
+
+
+@router.message(AddEventStates.datetime_time, F.text)
+async def process_datetime_time(message: Message, state: FSMContext):
+    """Parse time (HH:MM) and combine with calendar date."""
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    calendar_date = data.get("calendar_date")
+    if not calendar_date:
+        await state.clear()
+        await message.answer(t(lang, "cancelled"))
+        return
+    parsed = _parse_time(message.text or "")
+    if not parsed:
+        await message.answer("Введи время в формате ЧЧ:ММ (например 14:30)" if lang == "ru" else "Enter time as HH:MM (e.g. 14:30)")
+        return
+    hour, minute = parsed
+    dt = datetime(calendar_date.year, calendar_date.month, calendar_date.day, hour, minute)
+    timezone = data.get("timezone", DEFAULT_TIMEZONE)
+    dt_utc = local_to_utc(dt, timezone)
+    if dt_utc < utc_now():
+        await message.answer(t(lang, "datetime_past"))
         return
     await state.update_data(event_datetime=dt)
     await state.set_state(AddEventStates.recurrence)
@@ -220,7 +336,7 @@ async def cb_event_edit(cb: CallbackQuery, state: FSMContext):
             await cb.answer("Нет доступа." if (cb.from_user.language_code or "").startswith("ru") else "No access.", show_alert=True)
             return
         lang, _ = await get_user_settings(conn, cb.from_user.id) or ("ru", DEFAULT_TIMEZONE)
-        dt_str = event.event_datetime.strftime("%d.%m.%Y %H:%M")
+        dt_str = format_utc_for_display(event.event_datetime, event.timezone)
         await state.set_state(EditEventStates.choose_field)
         await state.update_data(
             event_id=event_id,
@@ -278,11 +394,11 @@ async def cb_edit_field(cb: CallbackQuery, state: FSMContext):
             )
         elif field == "datetime":
             await state.set_state(EditEventStates.edit_datetime)
-            dt_str = event.event_datetime.strftime("%d.%m.%Y %H:%M")
+            dt_str = format_utc_for_display(event.event_datetime, event.timezone)
             hint = t(lang, "edit_current_datetime", datetime=dt_str)
             await cb.message.edit_text(
                 t(lang, "ask_event_datetime") + "\n\n" + hint,
-                reply_markup=cancel_kb(lang),
+                reply_markup=datetime_calendar_kb(lang),
             )
         elif field == "recurrence":
             await state.set_state(EditEventStates.edit_recurrence)
@@ -379,19 +495,58 @@ async def process_edit_datetime(message: Message, state: FSMContext):
     lang = data.get("lang", "ru")
     event_id = data.get("event_id")
     dt = _parse_datetime(message.text or "")
-    if not dt or dt < datetime.now():
+    if not dt:
         await message.answer(t(lang, "invalid_datetime"))
         return
     conn = await get_db()
     try:
         event = await get_event_by_id(conn, event_id)
-        if event and event.user_id == await get_or_create_user(conn, message.from_user.id):
-            await update_event(conn, event_id, event_datetime=dt)
-            await state.clear()
-            await message.answer(t(lang, "event_updated"))
-        else:
+        if not event or event.user_id != await get_or_create_user(conn, message.from_user.id):
             await state.clear()
             await message.answer(t(lang, "event_deleted"))
+            return
+        dt_utc = local_to_utc(dt, event.timezone)
+        if dt_utc < utc_now():
+            await message.answer(t(lang, "datetime_past"))
+            return
+        await update_event(conn, event_id, event_datetime=dt_utc)
+        await state.clear()
+        await message.answer(t(lang, "event_updated"))
+    finally:
+        await conn.close()
+
+
+@router.message(EditEventStates.edit_datetime_time, F.text)
+async def process_edit_datetime_time(message: Message, state: FSMContext):
+    """Parse time after calendar date selection when editing."""
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    event_id = data.get("event_id")
+    calendar_date = data.get("calendar_date")
+    if not calendar_date:
+        await state.clear()
+        await message.answer(t(lang, "event_deleted"))
+        return
+    parsed = _parse_time(message.text or "")
+    if not parsed:
+        await message.answer("Введи время в формате ЧЧ:ММ" if lang == "ru" else "Enter time as HH:MM")
+        return
+    hour, minute = parsed
+    dt = datetime(calendar_date.year, calendar_date.month, calendar_date.day, hour, minute)
+    conn = await get_db()
+    try:
+        event = await get_event_by_id(conn, event_id)
+        if not event or event.user_id != await get_or_create_user(conn, message.from_user.id):
+            await state.clear()
+            await message.answer(t(lang, "event_deleted"))
+            return
+        dt_utc = local_to_utc(dt, event.timezone)
+        if dt_utc < utc_now():
+            await message.answer(t(lang, "datetime_past"))
+            return
+        await update_event(conn, event_id, event_datetime=dt_utc)
+        await state.clear()
+        await message.answer(t(lang, "event_updated"))
     finally:
         await conn.close()
 

@@ -118,6 +118,17 @@ def edit_weekly_days_kb(lang: str, event_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def list_events_kb(events: list, lang: str) -> InlineKeyboardMarkup:
+    """Edit/Delete buttons for each event in the list. events: list of Event-like objects with .id."""
+    builder = InlineKeyboardBuilder()
+    for ev in events:
+        builder.row(
+            InlineKeyboardButton(text=t(lang, "btn_edit"), callback_data=f"ev:edit:{ev.id}"),
+            InlineKeyboardButton(text=t(lang, "btn_delete"), callback_data=f"ev:del:{ev.id}"),
+        )
+    return builder.as_markup()
+
+
 def settings_kb(lang: str) -> InlineKeyboardMarkup:
     """Language selection."""
     builder = InlineKeyboardBuilder()
@@ -132,4 +143,14 @@ def cancel_kb(lang: str) -> InlineKeyboardMarkup:
     """Cancel button."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=t(lang, "cancel"), callback_data="cancel"))
+    return builder.as_markup()
+
+
+def datetime_calendar_kb(lang: str) -> InlineKeyboardMarkup:
+    """Calendar and Cancel buttons for date selection."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=t(lang, "btn_calendar"), callback_data="cal:open"),
+        InlineKeyboardButton(text=t(lang, "cancel"), callback_data="cancel"),
+    )
     return builder.as_markup()

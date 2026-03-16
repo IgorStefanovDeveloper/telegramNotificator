@@ -7,7 +7,7 @@
 - ✅ Добавление событий с датой и временем (МСК по умолчанию)
 - ✅ Уведомления в момент наступления события
 - ✅ Действия: отметить выполненным / отложить на час
-- ✅ Список грядущих событий
+- ✅ Список грядущих событий (до 2 лет)
 - ✅ Повторяющиеся события: каждый понедельник, каждое 19-е число и т.п.
 - ✅ Удаление и редактирование событий
 - ✅ Русский и английский интерфейс
@@ -43,3 +43,62 @@ python main.py
 |------------|----------|
 | `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather (обязательно) |
 | `DATABASE_PATH` | Путь к SQLite (по умолчанию `./data/events.db`) |
+
+## Данные
+
+- **У каждого пользователя свои события** — изоляция по `telegram_id`, чужие события недоступны.
+- **БД — один файл SQLite** (`data/events.db`), удобно бэкапить и переносить.
+
+## Деплой на бесплатный хостинг
+
+### Railway
+1. Зарегистрируйтесь на [railway.app](https://railway.app)
+2. New Project → Deploy from GitHub
+3. Добавьте переменную `TELEGRAM_BOT_TOKEN`
+4. **Важно:** добавьте [Volume](https://docs.railway.app/reference/volumes), примонтируйте к `/data`, и задайте переменную `DATABASE_PATH=/data/events.db` — иначе БД будет сбрасываться при каждом редеплое.
+5. Railway запустит `python main.py` автоматически
+
+### Render
+1. [render.com](https://render.com) → New → Background Worker
+2. Подключите репозиторий
+3. Build: `pip install -r requirements.txt`
+4. Start: `python main.py`
+5. Добавьте `TELEGRAM_BOT_TOKEN` в Environment
+
+### PythonAnywhere
+1. Создайте бесплатный аккаунт
+2. Загрузите код через Git или Files
+3. Создайте Always-On Task с командой `python main.py`
+
+## Тесты
+
+```bash
+# Все тесты (unit + integration)
+python -m pytest tests -v
+
+# Только unit
+python -m pytest tests -m "not integration" -v
+
+# Только integration
+python -m pytest tests -m integration -v
+```
+
+## Резервное копирование и миграция
+
+SQLite хранит всё в одном файле — его можно просто скопировать.
+
+**Скачать БД с Railway:**
+```bash
+# Через Railway CLI
+railway run cp data/events.db ./events_backup.db
+# Затем скачайте events_backup.db через dashboard или railway connect
+```
+
+**Или через One-off Command в Railway:** в Dashboard → ваш сервис → добавить временную команду `cat data/events.db | base64` и сохранить вывод (для небольшой БД).
+
+**При переезде:** скопируйте `events.db` в папку `data/` на новом хосте и укажите `DATABASE_PATH=./data/events.db`. Структура таблиц совместима.
+
+## Безопасность
+
+- Все секреты хранятся в `.env` (не коммитить!)
+- Файл `.env` в `.gitignore`

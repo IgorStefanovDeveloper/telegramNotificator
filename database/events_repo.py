@@ -1,10 +1,11 @@
-"""Event repository - CRUD and queries."""
+"""Event repository - CRUD and queries. event_datetime stored in UTC."""
 from datetime import datetime, timedelta
 from typing import Optional
 
 import aiosqlite
 
 from config import DEFAULT_TIMEZONE, MAX_FUTURE_MONTHS
+from utils_timezone import local_to_utc, utc_now
 from database.models import Event, RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 
 
@@ -51,7 +52,8 @@ async def create_event(
     recurrence_type: str = RECURRENCE_NONE,
     recurrence_value: Optional[str] = None,
 ) -> int:
-    """Create event and return its id."""
+    """Create event. event_datetime is local (user TZ); we store UTC."""
+    dt_utc = local_to_utc(event_datetime, timezone)
     cursor = await conn.execute(
         """INSERT INTO events (user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -59,7 +61,7 @@ async def create_event(
             user_id,
             title,
             description or "",
-            event_datetime.isoformat(),
+            dt_utc.isoformat(),
             timezone,
             recurrence_type,
             recurrence_value or "",
@@ -99,8 +101,9 @@ async def get_user_events_upcoming(
     return [_row_to_event(r) for r in rows]
 
 
-async def get_events_to_notify(conn: aiosqlite.Connection, now: datetime) -> list[tuple[int, int, Event]]:
-    """Get events that should be notified now. Returns list of (telegram_id, user_db_id, event)."""
+async def get_events_to_notify(conn: aiosqlite.Connection, now: datetime = None) -> list[tuple[int, int, Event]]:
+    """Get events that should be notified now. event_datetime in DB is UTC. now defaults to utc_now()."""
+    now = now or utc_now()
     window_start = (now - timedelta(minutes=2)).isoformat()
     window_end = now.isoformat()
 
@@ -199,7 +202,7 @@ async def update_event(
     *,
     title: Optional[str] = None,
     description: Optional[str] = None,
-    event_datetime: Optional[datetime] = None,
+    event_datetime: Optional[datetime] = None,  # Must be UTC when updating
     timezone: Optional[str] = None,
     recurrence_type: Optional[str] = None,
     recurrence_value: Optional[str] = None,

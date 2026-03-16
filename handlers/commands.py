@@ -9,7 +9,7 @@ from database.db import get_db
 from database.events_repo import get_or_create_user, get_user_settings, get_user_events_upcoming
 from database.models import RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 from i18n import t
-from keyboards import main_menu, settings_kb
+from keyboards import main_menu, settings_kb, list_events_kb
 
 router = Router()
 
@@ -30,15 +30,10 @@ def _recurrence_text(lang: str, rec_type: str, rec_value: str) -> str:
     return t(lang, "recurrence_once")
 
 
-def _format_datetime(dt, timezone_str: str = DEFAULT_TIMEZONE) -> str:
-    try:
-        import pytz
-        tz = pytz.timezone(timezone_str)
-        if dt.tzinfo is None:
-            dt = tz.localize(dt)
-        return dt.strftime("%d.%m.%Y %H:%M")
-    except Exception:
-        return dt.strftime("%d.%m.%Y %H:%M") if hasattr(dt, 'strftime') else str(dt)
+def _format_datetime(dt_utc, timezone_str: str = DEFAULT_TIMEZONE) -> str:
+    """Format UTC-stored datetime for display in user TZ."""
+    from utils_timezone import format_utc_for_display
+    return format_utc_for_display(dt_utc, timezone_str)
 
 
 @router.message(Command("start"))
@@ -98,7 +93,8 @@ async def cmd_list(message: Message, state: FSMContext):
     try:
         user_db_id = await get_or_create_user(conn, message.from_user.id)
         lang, tz = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
-        now = datetime.now()
+        from utils_timezone import utc_now
+        now = utc_now()
         to_dt = now + timedelta(days=30 * MAX_FUTURE_MONTHS)
         events = await get_user_events_upcoming(conn, user_db_id, now, to_dt)
         if not events:
@@ -120,6 +116,10 @@ async def cmd_list(message: Message, state: FSMContext):
                 rec_line = _recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or "")
                 lines.append(t(lang, "event_item", title=ev.title, datetime=dt_str, recurrence_line=rec_line))
         text = t(lang, "list_upcoming", events="\n".join(lines))
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=list_events_kb(events, lang),
+        )
     finally:
         await conn.close()

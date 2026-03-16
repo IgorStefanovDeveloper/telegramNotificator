@@ -17,9 +17,11 @@ TEXTS = {
         "btn_list_events": "📅 Список событий",
         "btn_settings": "⚙️ Настройки",
         "ask_event_title": "Введи название события:",
-        "ask_event_datetime": "Введи дату и время в формате:\n"
-                              "<code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n\n"
+        "ask_event_datetime": "Введи дату и время в формате <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+                              "или выбери дату в календаре:\n\n"
                               "Например: 19.03.2025 14:30",
+        "btn_calendar": "📅 Календарь",
+        "ask_event_time": "Выбери дату выше ✓ Теперь введи время (ЧЧ:ММ):",
         "ask_recurrence": "Повторять событие?",
         "btn_once": "Один раз",
         "btn_weekly": "Еженедельно",
@@ -52,6 +54,7 @@ TEXTS = {
         "lang_changed": "Язык изменён.",
         "timezone_changed": "Часовой пояс изменён.",
         "invalid_datetime": "Неверный формат. Используй ДД.ММ.ГГГГ ЧЧ:ММ",
+        "datetime_past": "Дата и время уже прошли. Введи будущую дату.",
         "invalid_day": "Введи число от 1 до 31.",
         "cancel": "Отмена",
         "cancelled": "Отменено.",
@@ -79,9 +82,11 @@ TEXTS = {
         "btn_list_events": "📅 List events",
         "btn_settings": "⚙️ Settings",
         "ask_event_title": "Enter event title:",
-        "ask_event_datetime": "Enter date and time in format:\n"
-                              "<code>DD.MM.YYYY HH:MM</code>\n\n"
+        "ask_event_datetime": "Enter date and time as <code>DD.MM.YYYY HH:MM</code>\n"
+                              "or pick a date from the calendar:\n\n"
                               "Example: 19.03.2025 14:30",
+        "btn_calendar": "📅 Calendar",
+        "ask_event_time": "Date selected ✓ Now enter time (HH:MM):",
         "ask_recurrence": "Repeat this event?",
         "btn_once": "Once",
         "btn_weekly": "Weekly",
@@ -114,6 +119,7 @@ TEXTS = {
         "lang_changed": "Language changed.",
         "timezone_changed": "Timezone changed.",
         "invalid_datetime": "Invalid format. Use DD.MM.YYYY HH:MM",
+        "datetime_past": "Date and time are in the past. Enter a future date.",
         "invalid_day": "Enter a number from 1 to 31.",
         "cancel": "Cancel",
         "cancelled": "Cancelled.",

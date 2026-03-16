@@ -1,9 +1,9 @@
-"""Tests for _parse_datetime."""
+"""Tests for _parse_datetime and _parse_time."""
 from datetime import datetime
 
 import pytest
 
-from handlers.events import _parse_datetime
+from handlers.events import _parse_datetime, _parse_time
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -28,3 +28,28 @@ def test_parse_datetime_valid(text, expected):
 ])
 def test_parse_datetime_invalid(text):
     assert _parse_datetime(text) is None
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("14:30", (14, 30)),
+    ("09:00", (9, 0)),
+    ("23:59", (23, 59)),
+    ("0:0", (0, 0)),
+    ("  19:45  ", (19, 45)),
+])
+def test_parse_time_valid(text, expected):
+    assert _parse_time(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "25:00",
+    "12:60",
+    "12:-1",
+    "invalid",
+    "",
+    "12",
+    "12:30:00",
+    "12.30",
+])
+def test_parse_time_invalid(text):
+    assert _parse_time(text) is None
