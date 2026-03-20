@@ -42,15 +42,14 @@ python main.py
 | Переменная | Описание |
 |------------|----------|
 | `TELEGRAM_BOT_TOKEN` | Токен бота от @BotFather (обязательно) |
-| `DATABASE_URL` | **PostgreSQL** (рекомендуется для Railway). Если задан — SQLite не используется. |
-| `DATABASE_PATH` | Путь к SQLite, только если `DATABASE_URL` пуст (по умолчанию `./data/events.db`) |
+| `DATABASE_URL` | **PostgreSQL**, строка подключения (обязательно для бота) |
 | `DATABASE_SSL` | Для Postgres: `1` (по умолчанию, TLS) или `0` для локального Postgres без SSL |
+| `TEST_DATABASE_URL` | Отдельная БД для `pytest` (рекомендуется); иначе см. `tests/conftest.py` |
 
 ## Данные
 
 - **У каждого пользователя свои события** — изоляция по `telegram_id`, чужие события недоступны.
-- **PostgreSQL** (продакшен на Railway): подключите плагин Postgres — в сервис бота подставится `DATABASE_URL`, данные не пропадают при редеплое.
-- **SQLite** (локально): один файл `data/events.db`; при запуске только additive-миграции, без пересоздания таблиц.
+- **PostgreSQL** обязателен: на Railway — плагин Postgres и `DATABASE_URL` в сервисе бота; локально — свой инстанс или Docker (см. ниже).
 
 ## Деплой на бесплатный хостинг
 
@@ -61,8 +60,6 @@ python main.py
 4. В сервисе бота: **Variables** → **Add Reference** → выберите Postgres → подставьте `DATABASE_URL` (или Railway сделает это сам при линке сервисов)
 5. Задайте `TELEGRAM_BOT_TOKEN`
 6. Запуск: `python main.py` (или укажите в настройках сервиса)
-
-**Альтернатива без Postgres:** [Volume](https://docs.railway.app/reference/volumes) на `/data` и `DATABASE_PATH=/data/events.db` — иначе SQLite в контейнере будет теряться при редеплое.
 
 ### Render
 1. [render.com](https://render.com) → New → Background Worker
@@ -78,11 +75,19 @@ python main.py
 
 ## Тесты
 
+Нужен **PostgreSQL**. Удобно поднять контейнер:
+
+```bash
+docker run --name pg-bot-test -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=telegram_bot_test -p 5432:5432 -d postgres:16
+```
+
+По умолчанию тесты подключаются к `postgresql://postgres:postgres@127.0.0.1:5432/telegram_bot_test` и выставляют `DATABASE_SSL=0`. Свой URL: переменная **`TEST_DATABASE_URL`** (или **`DATABASE_URL`** до запуска pytest).
+
 ```bash
 # Все тесты (unit + integration)
 python -m pytest tests -v
 
-# Только unit
+# Только unit (всё равно нужен Postgres для test_events_repo)
 python -m pytest tests -m "not integration" -v
 
 # Только integration
@@ -91,11 +96,7 @@ python -m pytest tests -m integration -v
 
 ## Резервное копирование и миграция
 
-**PostgreSQL:** делайте дампы через `pg_dump` (из Railway Postgres или локально с тем же `DATABASE_URL`).
-
-**SQLite:** один файл — просто скопируйте `data/events.db`.
-
-**Переезд SQLite → Postgres:** автоматического импорта нет; для больших данных используйте скрипт или `pgloader`. Для пары пользователей можно заново создать события или выгрузить вручную.
+**Резервные копии:** `pg_dump` с тем же `DATABASE_URL`, что у продакшена.
 
 ## Безопасность
 

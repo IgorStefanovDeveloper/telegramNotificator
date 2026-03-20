@@ -5,56 +5,20 @@ Covers the bug: when _save_event is called from a CallbackQuery handler,
 cb.message.from_user is the BOT, not the user. Events must be saved under
 cb.from_user.id (the actual user who pressed the button).
 """
-import pytest
-
-pytestmark = pytest.mark.integration
 from datetime import datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from database.connection import SqliteDbConn
-from database.db import init_schema
+pytestmark = pytest.mark.integration
+
+from database.db import get_db
 from database.events_repo import get_user_events_upcoming, get_or_create_user
+from handlers.events import _save_event
 
 
 BOT_TELEGRAM_ID = 999999
 USER_TELEGRAM_ID = 12345
-
-
-@pytest.fixture
-def temp_db_path(tmp_path):
-    """Temp directory for DB file. Patches config before init_db."""
-    db_path = tmp_path / "events.db"
-    return db_path
-
-
-@pytest.fixture
-async def integration_db(temp_db_path, monkeypatch):
-    """DB in temp path with schema, for integration tests."""
-    monkeypatch.setattr("handlers.events.get_db", _make_get_db(temp_db_path))
-    conn = await _connect(temp_db_path)
-    await init_schema(conn)
-    await conn.close()
-    yield temp_db_path
-
-
-def _make_get_db(path: Path):
-    """Factory for get_db that connects to path."""
-
-    async def _get_db():
-        return await _connect(path)
-
-    return _get_db
-
-
-async def _connect(path: Path):
-    import aiosqlite
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    raw = await aiosqlite.connect(path)
-    return SqliteDbConn(raw)
 
 
 @pytest.fixture
@@ -96,16 +60,12 @@ def mock_message_from_user():
 
 @pytest.mark.asyncio
 async def test_save_event_from_callback_saves_to_correct_user(
-    integration_db, mock_state, mock_message_from_bot, monkeypatch
+    clean_db, mock_state, mock_message_from_bot
 ):
     """
     When _save_event is called from a callback (message.from_user = bot),
     passing telegram_id explicitly must save the event under that user.
     """
-    monkeypatch.setattr("handlers.events.get_db", _make_get_db(integration_db))
-
-    from handlers.events import _save_event
-
     await _save_event(
         mock_message_from_bot,
         mock_state,
@@ -114,7 +74,7 @@ async def test_save_event_from_callback_saves_to_correct_user(
         telegram_id=USER_TELEGRAM_ID,
     )
 
-    conn = await _connect(integration_db)
+    conn = await get_db()
     try:
         user_db_id = await get_or_create_user(conn, USER_TELEGRAM_ID)
         from_dt = datetime(2025, 1, 1)
@@ -128,20 +88,16 @@ async def test_save_event_from_callback_saves_to_correct_user(
 
 @pytest.mark.asyncio
 async def test_save_event_from_callback_without_telegram_id_saves_to_wrong_user(
-    integration_db, mock_state, mock_message_from_bot, monkeypatch
+    clean_db, mock_state, mock_message_from_bot
 ):
     """
     Regression: WITHOUT telegram_id, event would be saved under message.from_user (bot).
     The user's list would be empty.
     """
-    monkeypatch.setattr("handlers.events.get_db", _make_get_db(integration_db))
-
-    from handlers.events import _save_event
-
     await _save_event(mock_message_from_bot, mock_state, "none", None)
     # No telegram_id passed - uses message.from_user.id = BOT_TELEGRAM_ID
 
-    conn = await _connect(integration_db)
+    conn = await get_db()
     try:
         user_db_id = await get_or_create_user(conn, USER_TELEGRAM_ID)
         from_dt = datetime(2025, 1, 1)
@@ -161,20 +117,16 @@ async def test_save_event_from_callback_without_telegram_id_saves_to_wrong_user(
 
 @pytest.mark.asyncio
 async def test_save_event_from_message_saves_to_correct_user(
-    integration_db, mock_state, mock_message_from_user, monkeypatch
+    clean_db, mock_state, mock_message_from_user
 ):
     """
     When _save_event is called from a Message (user typed text), no telegram_id needed.
     message.from_user.id is the actual user.
     """
-    monkeypatch.setattr("handlers.events.get_db", _make_get_db(integration_db))
-
-    from handlers.events import _save_event
-
     await _save_event(mock_message_from_user, mock_state, "monthly", "19")
     # No telegram_id - uses message.from_user.id = USER_TELEGRAM_ID
 
-    conn = await _connect(integration_db)
+    conn = await get_db()
     try:
         user_db_id = await get_or_create_user(conn, USER_TELEGRAM_ID)
         from_dt = datetime(2025, 1, 1)
@@ -189,15 +141,11 @@ async def test_save_event_from_message_saves_to_correct_user(
 
 @pytest.mark.asyncio
 async def test_save_event_weekly_from_callback_saves_to_correct_user(
-    integration_db, mock_state, mock_message_from_bot, monkeypatch
+    clean_db, mock_state, mock_message_from_bot
 ):
     """
     Weekly recurring event from callback (day of week) — must save under telegram_id.
     """
-    monkeypatch.setattr("handlers.events.get_db", _make_get_db(integration_db))
-
-    from handlers.events import _save_event
-
     await _save_event(
         mock_message_from_bot,
         mock_state,
@@ -206,7 +154,7 @@ async def test_save_event_weekly_from_callback_saves_to_correct_user(
         telegram_id=USER_TELEGRAM_ID,
     )
 
-    conn = await _connect(integration_db)
+    conn = await get_db()
     try:
         user_db_id = await get_or_create_user(conn, USER_TELEGRAM_ID)
         from_dt = datetime(2025, 1, 1)

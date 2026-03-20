@@ -24,12 +24,12 @@ async def main():
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN is not set. Copy .env.example to .env and add your token.")
         sys.exit(1)
+    if not DATABASE_URL:
+        logger.error("DATABASE_URL is not set. Add PostgreSQL (Railway) or local Postgres URL.")
+        sys.exit(1)
 
     await init_db()
-    if DATABASE_URL:
-        logger.info("Database: PostgreSQL (DATABASE_URL)")
-    else:
-        logger.info("Database: SQLite file")
+    logger.info("Database: PostgreSQL")
 
     bot = Bot(
         token=TELEGRAM_BOT_TOKEN,

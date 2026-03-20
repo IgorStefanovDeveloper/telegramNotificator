@@ -1,10 +1,8 @@
-"""Unified async DB API: SQLite (aiosqlite) or PostgreSQL (asyncpg)."""
+"""PostgreSQL async DB API (asyncpg)."""
 from __future__ import annotations
 
 import re
 from typing import Any, Optional, Protocol, Tuple, runtime_checkable
-
-import aiosqlite
 
 
 def sql_qmarks_to_dollar(sql: str) -> str:
@@ -45,43 +43,6 @@ class DbConn(Protocol):
     async def execute_insert_returning_id(self, sql: str, args: Tuple[Any, ...] = ()) -> int: ...
 
     async def close(self) -> None: ...
-
-
-class SqliteDbConn:
-    """aiosqlite with shared API."""
-
-    def __init__(self, conn: aiosqlite.Connection):
-        self._conn = conn
-
-    async def fetchone(self, sql: str, args: Tuple[Any, ...] = ()) -> Optional[tuple]:
-        cursor = await self._conn.execute(sql, args)
-        row = await cursor.fetchone()
-        return tuple(row) if row is not None else None
-
-    async def fetchall(self, sql: str, args: Tuple[Any, ...] = ()) -> list[tuple]:
-        cursor = await self._conn.execute(sql, args)
-        rows = await cursor.fetchall()
-        return [tuple(r) for r in rows]
-
-    async def execute(self, sql: str, args: Tuple[Any, ...] = ()) -> None:
-        await self._conn.execute(sql, args)
-        await self._conn.commit()
-
-    async def execute_rowcount(self, sql: str, args: Tuple[Any, ...] = ()) -> int:
-        cursor = await self._conn.execute(sql, args)
-        await self._conn.commit()
-        return cursor.rowcount or 0
-
-    async def execute_insert_returning_id(self, sql: str, args: Tuple[Any, ...] = ()) -> int:
-        cursor = await self._conn.execute(sql, args)
-        row = await cursor.fetchone()
-        await self._conn.commit()
-        if not row:
-            raise RuntimeError("INSERT RETURNING id returned no row")
-        return int(row[0])
-
-    async def close(self) -> None:
-        await self._conn.close()
 
 
 class PostgresDbConn:
