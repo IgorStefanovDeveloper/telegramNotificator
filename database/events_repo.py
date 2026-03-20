@@ -1,5 +1,5 @@
 """Event repository - CRUD and queries. event_datetime stored in UTC."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from config import DEFAULT_TIMEZONE, MAX_FUTURE_MONTHS
@@ -22,17 +22,28 @@ def _parse_dt(val) -> Optional[datetime]:
     if val is None or val == "":
         return None
     if isinstance(val, datetime):
-        return val
-    return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+        return _naive_utc(val)
+    return _naive_utc(datetime.fromisoformat(str(val).replace("Z", "+00:00")))
+
+
+def _naive_utc(dt: datetime) -> datetime:
+    """Store/compare as naive UTC (asyncpg returns aware TIMESTAMPTZ)."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _row_to_event(row: tuple) -> Event:
+    ev_dt = row[4]
+    if isinstance(ev_dt, str):
+        ev_dt = datetime.fromisoformat(ev_dt.replace("Z", "+00:00"))
+    ev_dt = _naive_utc(ev_dt)
     return Event(
         id=row[0],
         user_id=row[1],
         title=row[2],
         description=row[3] or "",
-        event_datetime=datetime.fromisoformat(row[4]) if isinstance(row[4], str) else row[4],
+        event_datetime=ev_dt,
         timezone=row[5] or DEFAULT_TIMEZONE,
         recurrence_type=row[6] or RECURRENCE_NONE,
         recurrence_value=row[7] or "",
@@ -71,7 +82,7 @@ async def create_event(
 ) -> int:
     """Create event. event_datetime is local (user TZ); we store UTC."""
     dt_utc = local_to_utc(event_datetime, timezone)
-    dt_val = dt_utc.isoformat()
+    # asyncpg requires datetime for TIMESTAMPTZ, not ISO strings
     return await conn.execute_insert_returning_id(
         """INSERT INTO events (user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value)
            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id""",
@@ -79,7 +90,7 @@ async def create_event(
             user_id,
             title,
             description or "",
-            dt_val,
+            dt_utc,
             timezone,
             recurrence_type,
             recurrence_value or "",
@@ -102,15 +113,13 @@ async def get_user_events_upcoming(
 ) -> list[Event]:
     """Get user events in date range (active only: not cancelled)."""
     extra = "" if include_completed else " AND is_completed = 0"
-    from_val = from_dt.isoformat() if isinstance(from_dt, datetime) else from_dt
-    to_val = to_dt.isoformat() if isinstance(to_dt, datetime) else to_dt
     rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT}
             FROM events
             WHERE user_id = ? AND event_datetime >= ? AND event_datetime <= ?
               AND is_cancelled = 0{extra}
             ORDER BY event_datetime ASC""",
-        (user_id, from_val, to_val),
+        (user_id, from_dt, to_dt),
     )
     return [_row_to_event(r) for r in rows]
 
@@ -118,8 +127,8 @@ async def get_user_events_upcoming(
 async def get_events_to_notify(conn: DbConn, now: datetime = None) -> list[tuple[int, int, Event]]:
     """First notification: event time in window, never notified, not cancelled/completed."""
     now = now or utc_now()
-    window_start = (now - timedelta(minutes=2)).isoformat()
-    window_end = now.isoformat()
+    window_start = now - timedelta(minutes=2)
+    window_end = now
 
     rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT_E}, u.telegram_id
@@ -144,7 +153,7 @@ async def get_events_to_nudge(
 ) -> list[tuple[int, int, Event]]:
     """2nd and 3rd reminders: nudge_count 1 or 2, last notify >= interval ago, max 3 total sends."""
     now = now or utc_now()
-    threshold = (now - timedelta(minutes=interval_minutes)).isoformat()
+    threshold = now - timedelta(minutes=interval_minutes)
 
     rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT_E}, u.telegram_id
@@ -170,7 +179,7 @@ async def advance_recurring_event(conn: DbConn, event: Event) -> bool:
     if event.recurrence_type == RECURRENCE_NONE:
         return False
 
-    dt = event.event_datetime
+    dt = _naive_utc(event.event_datetime)
 
     if event.recurrence_type == RECURRENCE_MONTHLY and event.recurrence_value:
         day = int(event.recurrence_value)
@@ -196,7 +205,7 @@ async def advance_recurring_event(conn: DbConn, event: Event) -> bool:
 
     await conn.execute(
         "UPDATE events SET event_datetime = ?, notified_at = NULL, nudge_count = 0 WHERE id = ?",
-        (new_dt.isoformat(), event.id),
+        (new_dt, event.id),
     )
     return True
 
@@ -205,7 +214,7 @@ async def mark_notified(conn: DbConn, event_id: int, at: datetime) -> None:
     """After first notification: notified_at + nudge_count = 1."""
     await conn.execute(
         "UPDATE events SET notified_at = ?, nudge_count = 1 WHERE id = ?",
-        (at.isoformat(), event_id),
+        (at, event_id),
     )
 
 
@@ -213,13 +222,13 @@ async def record_nudge_sent(conn: DbConn, event_id: int, at: datetime) -> None:
     """Increment nudge_count and refresh notified_at (2nd/3rd reminder)."""
     await conn.execute(
         "UPDATE events SET notified_at = ?, nudge_count = nudge_count + 1 WHERE id = ? AND nudge_count < 3",
-        (at.isoformat(), event_id),
+        (at, event_id),
     )
 
 
 async def mark_completed(conn: DbConn, event_id: int) -> bool:
     """Mark event as completed."""
-    at = utc_now().isoformat()
+    at = utc_now()
     n = await conn.execute_rowcount(
         "UPDATE events SET is_completed = 1, completed_at = ?, nudge_count = 0, notified_at = NULL WHERE id = ?",
         (at, event_id),
@@ -229,7 +238,7 @@ async def mark_completed(conn: DbConn, event_id: int) -> bool:
 
 async def mark_cancelled(conn: DbConn, event_id: int) -> bool:
     """Soft cancel (keeps row for history)."""
-    at = utc_now().isoformat()
+    at = utc_now()
     n = await conn.execute_rowcount(
         "UPDATE events SET is_cancelled = 1, cancelled_at = ?, nudge_count = 0, notified_at = NULL WHERE id = ?",
         (at, event_id),
@@ -242,11 +251,17 @@ async def postpone_event(conn: DbConn, event_id: int, hours: int = 1) -> bool:
     row = await conn.fetchone("SELECT event_datetime FROM events WHERE id = ?", (event_id,))
     if not row:
         return False
-    old_dt = datetime.fromisoformat(row[0]) if isinstance(row[0], str) else row[0]
+    raw = row[0]
+    old_dt = (
+        datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if isinstance(raw, str)
+        else raw
+    )
+    old_dt = _naive_utc(old_dt)
     new_dt = old_dt + timedelta(hours=hours)
     await conn.execute(
         "UPDATE events SET event_datetime = ?, notified_at = NULL, nudge_count = 0 WHERE id = ?",
-        (new_dt.isoformat(), event_id),
+        (new_dt, event_id),
     )
     return True
 
@@ -273,7 +288,7 @@ async def update_event(
         params.append(description)
     if event_datetime is not None:
         updates.append("event_datetime = ?")
-        params.append(event_datetime.isoformat())
+        params.append(event_datetime)
     if timezone is not None:
         updates.append("timezone = ?")
         params.append(timezone)
