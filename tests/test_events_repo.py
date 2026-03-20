@@ -15,6 +15,12 @@ from database.events_repo import (
     advance_recurring_event,
     mark_notified,
     get_events_to_notify,
+    get_events_to_nudge,
+    record_nudge_sent,
+    mark_cancelled,
+    get_user_events_completed,
+    get_user_events_cancelled,
+    get_user_events_upcoming,
 )
 from database.models import RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 
@@ -147,3 +153,93 @@ async def test_get_events_to_notify(db_conn):
     await mark_notified(db_conn, event_id, now_utc)
     events2 = await get_events_to_notify(db_conn, now_utc)
     assert len(events2) == 0
+
+
+@pytest.mark.asyncio
+async def test_mark_notified_sets_nudge_count(db_conn):
+    user_id = await get_or_create_user(db_conn, 556)
+    eid = await create_event(db_conn, user_id=user_id, title="N", event_datetime=datetime(2025, 11, 21, 10, 0))
+    now = local_to_utc(datetime(2025, 11, 21, 10, 0), DEFAULT_TIMEZONE)
+    await mark_notified(db_conn, eid, now)
+    ev = await get_event_by_id(db_conn, eid)
+    assert ev.nudge_count == 1
+    assert ev.notified_at is not None
+
+
+@pytest.mark.asyncio
+async def test_get_events_to_nudge_and_record_nudge(db_conn):
+    user_id = await get_or_create_user(db_conn, 557)
+    eid = await create_event(db_conn, user_id=user_id, title="Nudge me", event_datetime=datetime(2025, 11, 22, 12, 0))
+    t0 = local_to_utc(datetime(2025, 11, 22, 12, 0), DEFAULT_TIMEZONE)
+    await mark_notified(db_conn, eid, t0)
+    # Too soon: no nudge
+    assert len(await get_events_to_nudge(db_conn, t0)) == 0
+    t_later = t0 + timedelta(minutes=31)
+    nudges = await get_events_to_nudge(db_conn, t_later)
+    assert len(nudges) == 1
+    await record_nudge_sent(db_conn, eid, t_later)
+    ev = await get_event_by_id(db_conn, eid)
+    assert ev.nudge_count == 2
+
+
+@pytest.mark.asyncio
+async def test_mark_cancelled_and_lists(db_conn):
+    user_id = await get_or_create_user(db_conn, 558)
+    eid = await create_event(db_conn, user_id=user_id, title="Cancel me", event_datetime=datetime(2025, 12, 5, 15, 0))
+    await mark_cancelled(db_conn, eid)
+    ev = await get_event_by_id(db_conn, eid)
+    assert ev.is_cancelled is True
+    now = local_to_utc(datetime(2025, 12, 1, 0, 0), DEFAULT_TIMEZONE)
+    to_dt = local_to_utc(datetime(2026, 12, 31, 0, 0), DEFAULT_TIMEZONE)
+    upcoming = await get_user_events_upcoming(db_conn, user_id, now, to_dt)
+    assert all(e.id != eid for e in upcoming)
+    cancelled = await get_user_events_cancelled(db_conn, user_id)
+    assert len(cancelled) == 1
+    assert cancelled[0].title == "Cancel me"
+
+
+@pytest.mark.asyncio
+async def test_mark_completed_list(db_conn):
+    user_id = await get_or_create_user(db_conn, 559)
+    eid = await create_event(db_conn, user_id=user_id, title="Done me", event_datetime=datetime(2025, 12, 6, 16, 0))
+    await mark_completed(db_conn, eid)
+    ev = await get_event_by_id(db_conn, eid)
+    assert ev.is_completed is True
+    assert ev.completed_at is not None
+    done_list = await get_user_events_completed(db_conn, user_id)
+    assert len(done_list) == 1
+    assert done_list[0].title == "Done me"
+
+
+@pytest.mark.asyncio
+async def test_nudge_stops_at_three(db_conn):
+    user_id = await get_or_create_user(db_conn, 561)
+    eid = await create_event(db_conn, user_id=user_id, title="Three max", event_datetime=datetime(2025, 11, 25, 8, 0))
+    t0 = local_to_utc(datetime(2025, 11, 25, 8, 0), DEFAULT_TIMEZONE)
+    await mark_notified(db_conn, eid, t0)
+    t1 = t0 + timedelta(minutes=31)
+    await record_nudge_sent(db_conn, eid, t1)
+    t2 = t1 + timedelta(minutes=31)
+    await record_nudge_sent(db_conn, eid, t2)
+    ev = await get_event_by_id(db_conn, eid)
+    assert ev.nudge_count == 3
+    assert len(await get_events_to_nudge(db_conn, t2 + timedelta(minutes=31))) == 0
+
+
+@pytest.mark.asyncio
+async def test_advance_recurring_resets_nudge(db_conn):
+    user_id = await get_or_create_user(db_conn, 560)
+    eid = await create_event(
+        db_conn,
+        user_id=user_id,
+        title="W",
+        event_datetime=datetime(2025, 10, 13, 9, 0),
+        recurrence_type=RECURRENCE_WEEKLY,
+        recurrence_value="0",
+    )
+    await mark_notified(db_conn, eid, local_to_utc(datetime(2025, 10, 13, 9, 0), DEFAULT_TIMEZONE))
+    event = await get_event_by_id(db_conn, eid)
+    await advance_recurring_event(db_conn, event)
+    event = await get_event_by_id(db_conn, eid)
+    assert event.nudge_count == 0
+    assert event.notified_at is None

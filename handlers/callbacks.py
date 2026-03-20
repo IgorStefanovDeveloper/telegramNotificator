@@ -8,7 +8,7 @@ from database.events_repo import (
     get_event_by_id,
     mark_completed,
     postpone_event,
-    advance_recurring_event,
+    mark_cancelled,
     delete_event,
     get_or_create_user,
     get_user_settings,
@@ -37,7 +37,7 @@ async def cb_event_done(cb: CallbackQuery):
             return
         lang, _ = await get_user_settings(conn, cb.from_user.id) or ("ru", DEFAULT_TIMEZONE)
         if event.recurrence_type != RECURRENCE_NONE:
-            await advance_recurring_event(conn, event)
+            # Следующее вхождение уже сдвинуто при отправке уведомления (scheduler)
             text = t(lang, "event_done")
         else:
             await mark_completed(conn, event_id)
@@ -70,6 +70,31 @@ async def cb_event_postpone(cb: CallbackQuery):
             await cb.message.edit_text(cb.message.text + "\n\n⏰ " + t(lang, "event_postponed"))
         except Exception:
             await cb.message.answer(t(lang, "event_postponed"))
+    finally:
+        await conn.close()
+
+
+@router.callback_query(F.data.startswith("ev:cancel:"))
+async def cb_event_cancel(cb: CallbackQuery):
+    """Soft cancel from notification (keeps history)."""
+    event_id = int(cb.data.split(":")[2])
+    conn = await get_db()
+    try:
+        event = await get_event_by_id(conn, event_id)
+        if not event:
+            await cb.answer("Событие не найдено.", show_alert=True)
+            return
+        user_db_id = await get_or_create_user(conn, cb.from_user.id)
+        if event.user_id != user_db_id:
+            await cb.answer("Нет доступа.", show_alert=True)
+            return
+        await mark_cancelled(conn, event_id)
+        lang, _ = await get_user_settings(conn, cb.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        await cb.answer()
+        try:
+            await cb.message.edit_text(cb.message.text + "\n\n🚫 " + t(lang, "event_cancelled"))
+        except Exception:
+            await cb.message.answer(t(lang, "event_cancelled"))
     finally:
         await conn.close()
 

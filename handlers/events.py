@@ -25,12 +25,11 @@ from database.models import RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEK
 from i18n import t
 from keyboards import (
     recurrence_kb,
-    weekly_days_kb,
     cancel_kb,
     datetime_calendar_kb,
+    time_picker_kb,
     edit_field_kb,
     edit_recurrence_kb,
-    edit_weekly_days_kb,
 )
 
 router = Router()
@@ -41,8 +40,6 @@ class AddEventStates(StatesGroup):
     datetime = State()
     datetime_time = State()  # After calendar date selected, waiting for HH:MM
     recurrence = State()
-    weekly_day = State()
-    monthly_day = State()
 
 
 class EditEventStates(StatesGroup):
@@ -51,8 +48,6 @@ class EditEventStates(StatesGroup):
     edit_datetime = State()
     edit_datetime_time = State()  # After calendar date selected
     edit_recurrence = State()
-    edit_weekly_day = State()
-    edit_monthly_day = State()
 
 
 def _parse_time(text: str) -> tuple[int, int] | None:
@@ -113,9 +108,15 @@ async def process_title(message: Message, state: FSMContext):
         return
     await state.update_data(title=message.text.strip())
     await state.set_state(AddEventStates.datetime)
+    cal = _make_calendar(lang)
+    markup = await cal.start_calendar()
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    btn_text = "✏️ Ввести дату вручную" if lang == "ru" else "✏️ Enter date manually"
+    manual_btn = InlineKeyboardButton(text=btn_text, callback_data="cal:manual")
+    combined = InlineKeyboardMarkup(inline_keyboard=markup.inline_keyboard + [[manual_btn]])
     await message.answer(
-        t(lang, "ask_event_datetime"),
-        reply_markup=datetime_calendar_kb(lang),
+        t(lang, "ask_event_date"),
+        reply_markup=combined,
     )
 
 
@@ -145,6 +146,22 @@ async def _open_calendar(cb: CallbackQuery, lang: str) -> None:
     """Show calendar inline."""
     cal = _make_calendar(lang)
     await cb.message.edit_reply_markup(reply_markup=await cal.start_calendar())
+
+
+@router.callback_query(F.data == "cal:manual")
+async def cb_calendar_manual(cb: CallbackQuery, state: FSMContext):
+    """Switch to manual date input."""
+    await cb.answer()
+    current = await state.get_state()
+    allowed = ("AddEventStates:datetime", "EditEventStates:edit_datetime")
+    if current not in allowed:
+        return
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    await cb.message.edit_text(
+        t(lang, "ask_event_datetime"),
+        reply_markup=datetime_calendar_kb(lang),
+    )
 
 
 @router.callback_query(F.data == "cal:open")
@@ -190,7 +207,7 @@ async def cb_calendar_select_add(cb: CallbackQuery, callback_data: SimpleCalenda
         await state.set_state(AddEventStates.datetime_time)
         await cb.message.edit_text(
             t(lang, "ask_event_time"),
-            reply_markup=cancel_kb(lang),
+            reply_markup=time_picker_kb(lang),
         )
     elif callback_data.act == SimpleCalAct.cancel:
         await cb.message.edit_reply_markup(reply_markup=datetime_calendar_kb(lang))
@@ -208,10 +225,85 @@ async def cb_calendar_select_edit(cb: CallbackQuery, callback_data: SimpleCalend
         await state.set_state(EditEventStates.edit_datetime_time)
         await cb.message.edit_text(
             t(lang, "ask_event_time"),
-            reply_markup=cancel_kb(lang),
+            reply_markup=time_picker_kb(lang),
         )
     elif callback_data.act == SimpleCalAct.cancel:
         await cb.message.edit_reply_markup(reply_markup=datetime_calendar_kb(lang))
+
+
+@router.callback_query(EditEventStates.edit_datetime_time, F.data.startswith("time:"))
+async def cb_time_picker_edit(cb: CallbackQuery, state: FSMContext):
+    """Handle time picker when editing event."""
+    await cb.answer()
+    value = cb.data.split(":")[1]
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    event_id = data.get("event_id")
+    calendar_date = data.get("calendar_date")
+    if not calendar_date or not event_id:
+        await state.clear()
+        return
+    if value == "manual":
+        await cb.message.edit_text(
+            t(lang, "ask_event_time") + "\n\n" + ("Например: 14:30" if lang == "ru" else "E.g.: 14:30"),
+            reply_markup=cancel_kb(lang),
+        )
+        return
+    parsed = _parse_time(value)
+    if not parsed:
+        return
+    hour, minute = parsed
+    dt = datetime(calendar_date.year, calendar_date.month, calendar_date.day, hour, minute)
+    conn = await get_db()
+    try:
+        event = await get_event_by_id(conn, event_id)
+        if not event or event.user_id != await get_or_create_user(conn, cb.from_user.id):
+            await state.clear()
+            return
+        dt_utc = local_to_utc(dt, event.timezone)
+        if dt_utc < utc_now():
+            await cb.answer(t(lang, "datetime_past"), show_alert=True)
+            return
+        await update_event(conn, event_id, event_datetime=dt_utc)
+        await state.clear()
+        await cb.message.edit_text(cb.message.text + "\n\n✅ " + t(lang, "event_updated"))
+    finally:
+        await conn.close()
+
+
+@router.callback_query(AddEventStates.datetime_time, F.data.startswith("time:"))
+async def cb_time_picker(cb: CallbackQuery, state: FSMContext):
+    """Handle time picker: quick select or manual."""
+    await cb.answer()
+    value = cb.data.split(":")[1]
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    calendar_date = data.get("calendar_date")
+    if not calendar_date:
+        await state.clear()
+        return
+    if value == "manual":
+        await cb.message.edit_text(
+            t(lang, "ask_event_time") + "\n\n" + ("Например: 14:30" if lang == "ru" else "E.g.: 14:30"),
+            reply_markup=cancel_kb(lang),
+        )
+        return
+    parsed = _parse_time(value)
+    if not parsed:
+        return
+    hour, minute = parsed
+    dt = datetime(calendar_date.year, calendar_date.month, calendar_date.day, hour, minute)
+    timezone = data.get("timezone", DEFAULT_TIMEZONE)
+    dt_utc = local_to_utc(dt, timezone)
+    if dt_utc < utc_now():
+        await cb.answer(t(lang, "datetime_past"), show_alert=True)
+        return
+    await state.update_data(event_datetime=dt)
+    await state.set_state(AddEventStates.recurrence)
+    await cb.message.edit_text(
+        t(lang, "ask_recurrence"),
+        reply_markup=recurrence_kb(lang),
+    )
 
 
 @router.message(AddEventStates.datetime_time, F.text)
@@ -249,39 +341,21 @@ async def process_recurrence(cb: CallbackQuery, state: FSMContext):
     rec_type = cb.data.split(":")[1]
     data = await state.get_data()
     lang = data.get("lang", "ru")
+    event_datetime = data.get("event_datetime")
 
     if rec_type == "once":
         await _save_event(cb.message, state, RECURRENCE_NONE, None, telegram_id=cb.from_user.id)
         return
     if rec_type == "weekly":
-        await state.set_state(AddEventStates.weekly_day)
-        await cb.message.edit_text(t(lang, "ask_weekly_day"), reply_markup=weekly_days_kb(lang))
+        # Используем день недели из уже выбранной даты (0=Пн, 6=Вс)
+        day = str(event_datetime.weekday()) if event_datetime else "0"
+        await _save_event(cb.message, state, RECURRENCE_WEEKLY, day, telegram_id=cb.from_user.id)
         return
     if rec_type == "monthly":
-        await state.set_state(AddEventStates.monthly_day)
-        await cb.message.edit_text(t(lang, "ask_monthly_day"), reply_markup=cancel_kb(lang))
+        # Используем число месяца из уже выбранной даты
+        day = str(event_datetime.day) if event_datetime else "1"
+        await _save_event(cb.message, state, RECURRENCE_MONTHLY, day, telegram_id=cb.from_user.id)
         return
-
-
-@router.callback_query(AddEventStates.weekly_day, F.data.startswith("day:"))
-async def process_weekly_day(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
-    day = cb.data.split(":")[1]
-    await _save_event(cb.message, state, RECURRENCE_WEEKLY, day, telegram_id=cb.from_user.id)
-
-
-@router.message(AddEventStates.monthly_day, F.text)
-async def process_monthly_day(message: Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    try:
-        day = int(message.text.strip())
-        if 1 <= day <= 31:
-            await _save_event(message, state, RECURRENCE_MONTHLY, str(day), telegram_id=message.from_user.id)
-        else:
-            await message.answer(t(lang, "invalid_day"))
-    except ValueError:
-        await message.answer(t(lang, "invalid_day"))
 
 
 async def _save_event(message, state: FSMContext, rec_type: str, rec_value: str | None, *, telegram_id: int = None):
@@ -455,32 +529,13 @@ async def cb_edit_recurrence(cb: CallbackQuery, state: FSMContext):
             await update_event(conn, event_id, recurrence_type=RECURRENCE_NONE, recurrence_value="")
             await _finish_edit(cb, state, lang)
         elif rec_type == "weekly":
-            await state.set_state(EditEventStates.edit_weekly_day)
-            await state.update_data(event_id=event_id)
-            await cb.message.edit_text(t(lang, "ask_weekly_day"), reply_markup=edit_weekly_days_kb(lang, event_id))
+            day = str(event.event_datetime.weekday()) if event.event_datetime else "0"
+            await update_event(conn, event_id, recurrence_type=RECURRENCE_WEEKLY, recurrence_value=day)
+            await _finish_edit(cb, state, lang)
         elif rec_type == "monthly":
-            await state.set_state(EditEventStates.edit_monthly_day)
-            await state.update_data(event_id=event_id)
-            await cb.message.edit_text(t(lang, "ask_monthly_day"), reply_markup=cancel_kb(lang))
-    finally:
-        await conn.close()
-
-
-@router.callback_query(F.data.startswith("edit:day:"))
-async def cb_edit_weekly_day(cb: CallbackQuery, state: FSMContext):
-    await cb.answer()
-    parts = cb.data.split(":")
-    if len(parts) < 4:
-        return
-    day, event_id_str = parts[2], parts[3]
-    event_id = int(event_id_str)
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-
-    conn = await get_db()
-    try:
-        await update_event(conn, event_id, recurrence_type=RECURRENCE_WEEKLY, recurrence_value=day)
-        await _finish_edit(cb, state, lang)
+            day = str(event.event_datetime.day) if event.event_datetime else "1"
+            await update_event(conn, event_id, recurrence_type=RECURRENCE_MONTHLY, recurrence_value=day)
+            await _finish_edit(cb, state, lang)
     finally:
         await conn.close()
 
@@ -567,32 +622,6 @@ async def process_edit_datetime_time(message: Message, state: FSMContext):
         await message.answer(t(lang, "event_updated"))
     finally:
         await conn.close()
-
-
-@router.message(EditEventStates.edit_monthly_day, F.text)
-async def process_edit_monthly_day(message: Message, state: FSMContext):
-    data = await state.get_data()
-    lang = data.get("lang", "ru")
-    event_id = data.get("event_id")
-    try:
-        day = int(message.text.strip())
-        if 1 <= day <= 31:
-            conn = await get_db()
-            try:
-                event = await get_event_by_id(conn, event_id)
-                if event and event.user_id == await get_or_create_user(conn, message.from_user.id):
-                    await update_event(conn, event_id, recurrence_type=RECURRENCE_MONTHLY, recurrence_value=str(day))
-                    await state.clear()
-                    await message.answer(t(lang, "event_updated"))
-                else:
-                    await state.clear()
-                    await message.answer(t(lang, "event_deleted"))
-            finally:
-                await conn.close()
-        else:
-            await message.answer(t(lang, "invalid_day"))
-    except ValueError:
-        await message.answer(t(lang, "invalid_day"))
 
 
 async def _finish_edit(cb: CallbackQuery, state: FSMContext, lang: str):

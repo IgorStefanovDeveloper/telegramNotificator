@@ -1,4 +1,4 @@
-"""Command handlers: /start, /help, /new, /list, /settings."""
+"""Command handlers: /start, /help, /list, /done, /cancelled, /settings."""
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -6,7 +6,13 @@ from aiogram.fsm.context import FSMContext
 
 from config import DEFAULT_TIMEZONE
 from database.db import get_db
-from database.events_repo import get_or_create_user, get_user_settings, get_user_events_upcoming
+from database.events_repo import (
+    get_or_create_user,
+    get_user_settings,
+    get_user_events_upcoming,
+    get_user_events_completed,
+    get_user_events_cancelled,
+)
 from database.models import RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 from i18n import t
 from keyboards import main_menu, settings_kb, list_events_kb
@@ -121,5 +127,61 @@ async def cmd_list(message: Message, state: FSMContext):
             parse_mode="HTML",
             reply_markup=list_events_kb(events, lang),
         )
+    finally:
+        await conn.close()
+
+
+@router.message(Command("done"))
+async def cmd_done(message: Message, state: FSMContext):
+    await state.clear()
+    conn = await get_db()
+    try:
+        user_db_id = await get_or_create_user(conn, message.from_user.id)
+        lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        events = await get_user_events_completed(conn, user_db_id, limit=30)
+        if not events:
+            await message.answer(t(lang, "list_history_empty"), parse_mode="HTML")
+            return
+        lines = []
+        for ev in events:
+            dt_str = _format_datetime(ev.event_datetime, ev.timezone)
+            lines.append(
+                t(
+                    lang,
+                    "event_item",
+                    title=ev.title,
+                    datetime=dt_str,
+                    recurrence_line=_recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or ""),
+                )
+            )
+        await message.answer(t(lang, "list_completed", events="\n".join(lines)), parse_mode="HTML")
+    finally:
+        await conn.close()
+
+
+@router.message(Command("cancelled"))
+async def cmd_cancelled(message: Message, state: FSMContext):
+    await state.clear()
+    conn = await get_db()
+    try:
+        user_db_id = await get_or_create_user(conn, message.from_user.id)
+        lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        events = await get_user_events_cancelled(conn, user_db_id, limit=30)
+        if not events:
+            await message.answer(t(lang, "list_history_empty"), parse_mode="HTML")
+            return
+        lines = []
+        for ev in events:
+            dt_str = _format_datetime(ev.event_datetime, ev.timezone)
+            lines.append(
+                t(
+                    lang,
+                    "event_item",
+                    title=ev.title,
+                    datetime=dt_str,
+                    recurrence_line=_recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or ""),
+                )
+            )
+        await message.answer(t(lang, "list_cancelled", events="\n".join(lines)), parse_mode="HTML")
     finally:
         await conn.close()

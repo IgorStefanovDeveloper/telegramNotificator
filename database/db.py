@@ -33,6 +33,10 @@ SCHEMA_SQL = """
         is_completed INTEGER DEFAULT 0,
         notified_at TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        is_cancelled INTEGER DEFAULT 0,
+        cancelled_at TEXT,
+        completed_at TEXT,
+        nudge_count INTEGER DEFAULT 0,
         FOREIGN KEY (user_id) REFERENCES users (id)
     );
 
@@ -44,6 +48,26 @@ SCHEMA_SQL = """
 async def init_schema(conn) -> None:
     """Run schema on given connection. Used by init_db and tests."""
     await conn.executescript(SCHEMA_SQL)
+    await conn.commit()
+    await migrate_events_table(conn)
+
+
+async def migrate_events_table(conn) -> None:
+    """Additive migrations only — never DROP data. Safe for existing DBs."""
+    cursor = await conn.execute("PRAGMA table_info(events)")
+    rows = await cursor.fetchall()
+    if not rows:
+        return
+    existing = {r[1] for r in rows}
+    alters = [
+        ("is_cancelled", "INTEGER DEFAULT 0"),
+        ("cancelled_at", "TEXT"),
+        ("completed_at", "TEXT"),
+        ("nudge_count", "INTEGER DEFAULT 0"),
+    ]
+    for col_name, col_def in alters:
+        if col_name not in existing:
+            await conn.execute(f"ALTER TABLE events ADD COLUMN {col_name} {col_def}")
     await conn.commit()
 
 

@@ -8,19 +8,42 @@ from config import DEFAULT_TIMEZONE, MAX_FUTURE_MONTHS
 from utils_timezone import local_to_utc, utc_now
 from database.models import Event, RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 
+# Explicit column order for SELECT (no telegram_id)
+_EVENT_SELECT = (
+    "id, user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value, "
+    "is_completed, notified_at, created_at, is_cancelled, cancelled_at, completed_at, nudge_count"
+)
+_EVENT_SELECT_E = (
+    "e.id, e.user_id, e.title, e.description, e.event_datetime, e.timezone, e.recurrence_type, e.recurrence_value, "
+    "e.is_completed, e.notified_at, e.created_at, e.is_cancelled, e.cancelled_at, e.completed_at, e.nudge_count"
+)
+
+
+def _parse_dt(val) -> Optional[datetime]:
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        return val
+    return datetime.fromisoformat(val)
+
 
 def _row_to_event(row: tuple) -> Event:
     return Event(
         id=row[0],
         user_id=row[1],
         title=row[2],
-        description=row[3],
-        event_datetime=datetime.fromisoformat(row[4]) if row[4] else None,
+        description=row[3] or "",
+        event_datetime=datetime.fromisoformat(row[4]) if isinstance(row[4], str) else row[4],
         timezone=row[5] or DEFAULT_TIMEZONE,
         recurrence_type=row[6] or RECURRENCE_NONE,
-        recurrence_value=row[7],
+        recurrence_value=row[7] or "",
         is_completed=bool(row[8]),
-        created_at=datetime.fromisoformat(row[9]) if row[9] else datetime.now(),
+        created_at=_parse_dt(row[10]) or datetime.now(),
+        notified_at=_parse_dt(row[9]),
+        is_cancelled=bool(row[11]) if len(row) > 11 else False,
+        cancelled_at=_parse_dt(row[12]) if len(row) > 12 else None,
+        completed_at=_parse_dt(row[13]) if len(row) > 13 else None,
+        nudge_count=int(row[14]) if len(row) > 14 and row[14] is not None else 0,
     )
 
 
@@ -74,8 +97,7 @@ async def create_event(
 async def get_event_by_id(conn: aiosqlite.Connection, event_id: int) -> Optional[Event]:
     """Get event by id."""
     cursor = await conn.execute(
-        "SELECT id, user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value, is_completed, created_at FROM events WHERE id = ?",
-        (event_id,),
+        f"SELECT {_EVENT_SELECT} FROM events WHERE id = ?", (event_id,)
     )
     row = await cursor.fetchone()
     return _row_to_event(row) if row else None
@@ -88,12 +110,13 @@ async def get_user_events_upcoming(
     to_dt: datetime,
     include_completed: bool = False,
 ) -> list[Event]:
-    """Get user events in date range."""
+    """Get user events in date range (active only: not cancelled)."""
     extra = "" if include_completed else " AND is_completed = 0"
     cursor = await conn.execute(
-        f"""SELECT id, user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value, is_completed, created_at
+        f"""SELECT {_EVENT_SELECT}
             FROM events
-            WHERE user_id = ? AND event_datetime >= ? AND event_datetime <= ?{extra}
+            WHERE user_id = ? AND event_datetime >= ? AND event_datetime <= ?
+              AND is_cancelled = 0{extra}
             ORDER BY event_datetime ASC""",
         (user_id, from_dt.isoformat(), to_dt.isoformat()),
     )
@@ -102,24 +125,52 @@ async def get_user_events_upcoming(
 
 
 async def get_events_to_notify(conn: aiosqlite.Connection, now: datetime = None) -> list[tuple[int, int, Event]]:
-    """Get events that should be notified now. event_datetime in DB is UTC. now defaults to utc_now()."""
+    """First notification: event time in window, never notified, not cancelled/completed."""
     now = now or utc_now()
     window_start = (now - timedelta(minutes=2)).isoformat()
     window_end = now.isoformat()
 
     cursor = await conn.execute(
-        """SELECT e.id, e.user_id, e.title, e.description, e.event_datetime, e.timezone, e.recurrence_type, e.recurrence_value, e.is_completed, e.created_at, u.telegram_id
+        f"""SELECT {_EVENT_SELECT_E}, u.telegram_id
            FROM events e
            JOIN users u ON e.user_id = u.id
-           WHERE e.is_completed = 0 AND e.notified_at IS NULL
+           WHERE e.is_completed = 0 AND e.is_cancelled = 0
+             AND e.notified_at IS NULL AND e.nudge_count = 0
              AND e.event_datetime >= ? AND e.event_datetime <= ?""",
         (window_start, window_end),
     )
     rows = await cursor.fetchall()
     result = []
     for r in rows:
-        event = _row_to_event(r[:10])
-        result.append((r[10], r[1], event))
+        event = _row_to_event(r[:15])
+        result.append((r[15], r[1], event))
+    return result
+
+
+async def get_events_to_nudge(
+    conn: aiosqlite.Connection,
+    now: datetime = None,
+    interval_minutes: int = 30,
+) -> list[tuple[int, int, Event]]:
+    """2nd and 3rd reminders: nudge_count 1 or 2, last notify >= interval ago, max 3 total sends."""
+    now = now or utc_now()
+    threshold = (now - timedelta(minutes=interval_minutes)).isoformat()
+
+    cursor = await conn.execute(
+        f"""SELECT {_EVENT_SELECT_E}, u.telegram_id
+           FROM events e
+           JOIN users u ON e.user_id = u.id
+           WHERE e.is_completed = 0 AND e.is_cancelled = 0
+             AND e.notified_at IS NOT NULL
+             AND e.nudge_count >= 1 AND e.nudge_count < 3
+             AND e.notified_at <= ?""",
+        (threshold,),
+    )
+    rows = await cursor.fetchall()
+    result = []
+    for r in rows:
+        event = _row_to_event(r[:15])
+        result.append((r[15], r[1], event))
     return result
 
 
@@ -155,7 +206,7 @@ async def advance_recurring_event(conn: aiosqlite.Connection, event: Event) -> b
         return False
 
     await conn.execute(
-        "UPDATE events SET event_datetime = ?, notified_at = NULL WHERE id = ?",
+        "UPDATE events SET event_datetime = ?, notified_at = NULL, nudge_count = 0 WHERE id = ?",
         (new_dt.isoformat(), event.id),
     )
     await conn.commit()
@@ -163,9 +214,18 @@ async def advance_recurring_event(conn: aiosqlite.Connection, event: Event) -> b
 
 
 async def mark_notified(conn: aiosqlite.Connection, event_id: int, at: datetime) -> None:
-    """Mark event as notified to avoid duplicate notifications."""
+    """After first notification: notified_at + nudge_count = 1."""
     await conn.execute(
-        "UPDATE events SET notified_at = ? WHERE id = ?",
+        "UPDATE events SET notified_at = ?, nudge_count = 1 WHERE id = ?",
+        (at.isoformat(), event_id),
+    )
+    await conn.commit()
+
+
+async def record_nudge_sent(conn: aiosqlite.Connection, event_id: int, at: datetime) -> None:
+    """Increment nudge_count and refresh notified_at (2nd/3rd reminder)."""
+    await conn.execute(
+        "UPDATE events SET notified_at = ?, nudge_count = nudge_count + 1 WHERE id = ? AND nudge_count < 3",
         (at.isoformat(), event_id),
     )
     await conn.commit()
@@ -173,15 +233,28 @@ async def mark_notified(conn: aiosqlite.Connection, event_id: int, at: datetime)
 
 async def mark_completed(conn: aiosqlite.Connection, event_id: int) -> bool:
     """Mark event as completed."""
+    at = utc_now().isoformat()
     cursor = await conn.execute(
-        "UPDATE events SET is_completed = 1 WHERE id = ?", (event_id,)
+        "UPDATE events SET is_completed = 1, completed_at = ?, nudge_count = 0, notified_at = NULL WHERE id = ?",
+        (at, event_id),
+    )
+    await conn.commit()
+    return cursor.rowcount > 0
+
+
+async def mark_cancelled(conn: aiosqlite.Connection, event_id: int) -> bool:
+    """Soft cancel (keeps row for history)."""
+    at = utc_now().isoformat()
+    cursor = await conn.execute(
+        "UPDATE events SET is_cancelled = 1, cancelled_at = ?, nudge_count = 0, notified_at = NULL WHERE id = ?",
+        (at, event_id),
     )
     await conn.commit()
     return cursor.rowcount > 0
 
 
 async def postpone_event(conn: aiosqlite.Connection, event_id: int, hours: int = 1) -> bool:
-    """Postpone event by N hours. Clears notified_at so it can be notified again."""
+    """Postpone event by N hours. Clears notification state for next cycle."""
     cursor = await conn.execute("SELECT event_datetime FROM events WHERE id = ?", (event_id,))
     row = await cursor.fetchone()
     if not row:
@@ -189,7 +262,7 @@ async def postpone_event(conn: aiosqlite.Connection, event_id: int, hours: int =
     old_dt = datetime.fromisoformat(row[0])
     new_dt = old_dt + timedelta(hours=hours)
     await conn.execute(
-        "UPDATE events SET event_datetime = ?, notified_at = NULL WHERE id = ?",
+        "UPDATE events SET event_datetime = ?, notified_at = NULL, nudge_count = 0 WHERE id = ?",
         (new_dt.isoformat(), event_id),
     )
     await conn.commit()
@@ -246,11 +319,48 @@ async def delete_event(conn: aiosqlite.Connection, event_id: int) -> bool:
 
 
 async def get_events_by_user_id(conn: aiosqlite.Connection, user_db_id: int) -> list[Event]:
-    """Get all non-completed events for user."""
+    """Get all active non-completed events for user."""
     cursor = await conn.execute(
-        """SELECT id, user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value, is_completed, created_at
-           FROM events WHERE user_id = ? AND is_completed = 0 ORDER BY event_datetime ASC""",
+        f"""SELECT {_EVENT_SELECT}
+           FROM events WHERE user_id = ? AND is_completed = 0 AND is_cancelled = 0
+           ORDER BY event_datetime ASC""",
         (user_db_id,),
+    )
+    rows = await cursor.fetchall()
+    return [_row_to_event(r) for r in rows]
+
+
+async def get_user_events_completed(
+    conn: aiosqlite.Connection,
+    user_id: int,
+    limit: int = 50,
+) -> list[Event]:
+    """Completed events, newest first."""
+    cursor = await conn.execute(
+        f"""SELECT {_EVENT_SELECT}
+           FROM events
+           WHERE user_id = ? AND is_completed = 1 AND is_cancelled = 0
+           ORDER BY COALESCE(completed_at, created_at) DESC
+           LIMIT ?""",
+        (user_id, limit),
+    )
+    rows = await cursor.fetchall()
+    return [_row_to_event(r) for r in rows]
+
+
+async def get_user_events_cancelled(
+    conn: aiosqlite.Connection,
+    user_id: int,
+    limit: int = 50,
+) -> list[Event]:
+    """Cancelled events, newest first."""
+    cursor = await conn.execute(
+        f"""SELECT {_EVENT_SELECT}
+           FROM events
+           WHERE user_id = ? AND is_cancelled = 1
+           ORDER BY COALESCE(cancelled_at, created_at) DESC
+           LIMIT ?""",
+        (user_id, limit),
     )
     rows = await cursor.fetchall()
     return [_row_to_event(r) for r in rows]

@@ -30,3 +30,8 @@ class Event:
     recurrence_value: Optional[str]  # day of month for monthly, weekday for weekly
     is_completed: bool
     created_at: datetime
+    notified_at: Optional[datetime] = None
+    is_cancelled: bool = False
+    cancelled_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    nudge_count: int = 0

@@ -1,11 +1,19 @@
 """Scheduler: check events and send notifications every minute."""
 from datetime import datetime
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from config import DEFAULT_TIMEZONE
 from database.db import get_db
-from database.events_repo import get_events_to_notify, mark_notified
+from database.events_repo import (
+    get_events_to_notify,
+    get_events_to_nudge,
+    mark_notified,
+    record_nudge_sent,
+    advance_recurring_event,
+)
+from database.models import RECURRENCE_NONE
 from i18n import t
 from keyboards import notification_actions_kb
 
@@ -27,8 +35,51 @@ async def _get_user_lang(user_db_id: int) -> str:
         await conn.close()
 
 
+async def _send_one_notification(bot, telegram_id: int, user_db_id: int, event, now: datetime) -> None:
+    lang = await _get_user_lang(user_db_id)
+    dt_str = _format_datetime(event.event_datetime, event.timezone)
+    text = t(lang, "notification", title=event.title, datetime=dt_str)
+    kb = notification_actions_kb(event.id, lang)
+    await bot.send_message(
+        telegram_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    if event.recurrence_type != RECURRENCE_NONE:
+        conn = await get_db()
+        try:
+            await advance_recurring_event(conn, event)
+        finally:
+            await conn.close()
+    else:
+        conn = await get_db()
+        try:
+            await mark_notified(conn, event.id, now)
+        finally:
+            await conn.close()
+
+
+async def _send_nudge(bot, telegram_id: int, user_db_id: int, event, now: datetime) -> None:
+    lang = await _get_user_lang(user_db_id)
+    dt_str = _format_datetime(event.event_datetime, event.timezone)
+    text = t(lang, "notification_nudge", title=event.title, datetime=dt_str)
+    kb = notification_actions_kb(event.id, lang)
+    await bot.send_message(
+        telegram_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    conn = await get_db()
+    try:
+        await record_nudge_sent(conn, event.id, now)
+    finally:
+        await conn.close()
+
+
 async def send_notifications(bot):
-    """Check pending events and send notifications. Called every minute. Uses UTC."""
+    """First notifications + follow-up nudges (up to 3 total). Uses UTC."""
     from utils_timezone import utc_now
 
     conn = await get_db()
@@ -37,19 +88,16 @@ async def send_notifications(bot):
         events_data = await get_events_to_notify(conn, now)
         for telegram_id, user_db_id, event in events_data:
             try:
-                lang = await _get_user_lang(user_db_id)
-                dt_str = _format_datetime(event.event_datetime, event.timezone)
-                text = t(lang, "notification", title=event.title, datetime=dt_str)
-                kb = notification_actions_kb(event.id, lang)
-                await bot.send_message(
-                    telegram_id,
-                    text,
-                    parse_mode="HTML",
-                    reply_markup=kb,
-                )
-                await mark_notified(conn, event.id, now)
+                await _send_one_notification(bot, telegram_id, user_db_id, event, now)
             except Exception as e:
                 print(f"Failed to notify {telegram_id} for event {event.id}: {e}")
+
+        nudge_data = await get_events_to_nudge(conn, now)
+        for telegram_id, user_db_id, event in nudge_data:
+            try:
+                await _send_nudge(bot, telegram_id, user_db_id, event, now)
+            except Exception as e:
+                print(f"Failed nudge {telegram_id} for event {event.id}: {e}")
     finally:
         await conn.close()
 

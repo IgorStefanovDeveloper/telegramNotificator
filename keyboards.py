@@ -62,12 +62,15 @@ def event_actions_kb(event_id: int, lang: str) -> InlineKeyboardMarkup:
 
 
 def notification_actions_kb(event_id: int, lang: str) -> InlineKeyboardMarkup:
-    """Done / Postpone / Edit for notification."""
+    """Done / Postpone / Edit / Cancel for notification."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=t(lang, "btn_done"), callback_data=f"ev:done:{event_id}"),
         InlineKeyboardButton(text=t(lang, "btn_postpone"), callback_data=f"ev:postpone:{event_id}"),
+    )
+    builder.row(
         InlineKeyboardButton(text=t(lang, "btn_edit"), callback_data=f"ev:edit:{event_id}"),
+        InlineKeyboardButton(text=t(lang, "btn_cancel_event"), callback_data=f"ev:cancel:{event_id}"),
     )
     return builder.as_markup()
 
@@ -151,6 +154,23 @@ def datetime_calendar_kb(lang: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=t(lang, "btn_calendar"), callback_data="cal:open"),
+        InlineKeyboardButton(text=t(lang, "cancel"), callback_data="cancel"),
+    )
+    return builder.as_markup()
+
+
+def time_picker_kb(lang: str) -> InlineKeyboardMarkup:
+    """Quick time selection + manual input option."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="08:00", callback_data="time:08:00"),
+        InlineKeyboardButton(text="09:00", callback_data="time:09:00"),
+        InlineKeyboardButton(text="12:00", callback_data="time:12:00"),
+        InlineKeyboardButton(text="18:00", callback_data="time:18:00"),
+        InlineKeyboardButton(text="20:00", callback_data="time:20:00"),
+    )
+    builder.row(
+        InlineKeyboardButton(text=t(lang, "btn_time_manual"), callback_data="time:manual"),
         InlineKeyboardButton(text=t(lang, "cancel"), callback_data="cancel"),
     )
     return builder.as_markup()
