@@ -42,6 +42,16 @@ def _format_datetime(dt_utc, timezone_str: str = DEFAULT_TIMEZONE) -> str:
     return format_utc_for_display(dt_utc, timezone_str)
 
 
+def _list_datetime_for_user(ev, user_tz: str, lang: str) -> str:
+    """Время в поясе из настроек; если событие в другом поясе — короткая пометка."""
+    dt_str = _format_datetime(ev.event_datetime, user_tz)
+    ev_tz = (ev.timezone or "").strip()
+    if ev_tz and ev_tz != (user_tz or "").strip():
+        marker = t(lang, "list_event_tz_marker", zone=timezone_display(lang, ev_tz))
+        dt_str = f"{dt_str} <i>({marker})</i>"
+    return dt_str
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message):
     user_id = message.from_user.id
@@ -116,7 +126,7 @@ async def cmd_list(message: Message, state: FSMContext):
             return
         lines = []
         for ev in events:
-            dt_str = _format_datetime(ev.event_datetime, ev.timezone)
+            dt_str = _list_datetime_for_user(ev, tz, lang)
             if ev.recurrence_type == RECURRENCE_WEEKLY and ev.recurrence_value:
                 days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
                 try:
@@ -132,7 +142,7 @@ async def cmd_list(message: Message, state: FSMContext):
         text = t(
             lang,
             "list_upcoming",
-            tz_intro=t(lang, "list_tz_intro"),
+            tz_intro=t(lang, "list_tz_intro_user", zone=timezone_display(lang, tz)),
             events="\n".join(lines),
         )
         await message.answer(
@@ -152,18 +162,18 @@ async def cmd_done(message: Message, state: FSMContext):
     conn = await get_db()
     try:
         user_db_id = await get_or_create_user(conn, message.from_user.id)
-        lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        lang, tz = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
         events = await get_user_events_completed(conn, user_db_id, limit=30)
         if not events:
             await message.answer(
-                t(lang, "list_history_empty"),
+                t(lang, "list_completed_empty"),
                 parse_mode="HTML",
                 reply_markup=main_menu(lang),
             )
             return
         lines = []
         for ev in events:
-            dt_str = _format_datetime(ev.event_datetime, ev.timezone)
+            dt_str = _list_datetime_for_user(ev, tz, lang)
             lines.append(
                 t(
                     lang,
@@ -174,7 +184,12 @@ async def cmd_done(message: Message, state: FSMContext):
                 )
             )
         await message.answer(
-            t(lang, "list_completed", events="\n".join(lines)),
+            t(
+                lang,
+                "list_completed",
+                tz_intro=t(lang, "list_history_tz_intro", zone=timezone_display(lang, tz)),
+                events="\n".join(lines),
+            ),
             parse_mode="HTML",
             reply_markup=main_menu(lang),
         )
@@ -189,18 +204,18 @@ async def cmd_cancelled(message: Message, state: FSMContext):
     conn = await get_db()
     try:
         user_db_id = await get_or_create_user(conn, message.from_user.id)
-        lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        lang, tz = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
         events = await get_user_events_cancelled(conn, user_db_id, limit=30)
         if not events:
             await message.answer(
-                t(lang, "list_history_empty"),
+                t(lang, "list_cancelled_empty"),
                 parse_mode="HTML",
                 reply_markup=main_menu(lang),
             )
             return
         lines = []
         for ev in events:
-            dt_str = _format_datetime(ev.event_datetime, ev.timezone)
+            dt_str = _list_datetime_for_user(ev, tz, lang)
             lines.append(
                 t(
                     lang,
@@ -211,7 +226,12 @@ async def cmd_cancelled(message: Message, state: FSMContext):
                 )
             )
         await message.answer(
-            t(lang, "list_cancelled", events="\n".join(lines)),
+            t(
+                lang,
+                "list_cancelled",
+                tz_intro=t(lang, "list_history_tz_intro", zone=timezone_display(lang, tz)),
+                events="\n".join(lines),
+            ),
             parse_mode="HTML",
             reply_markup=main_menu(lang),
         )
