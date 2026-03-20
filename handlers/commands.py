@@ -132,6 +132,7 @@ async def cmd_list(message: Message, state: FSMContext):
 
 
 @router.message(Command("done"))
+@router.message(F.text.in_({"✅ Выполненные", "✅ Completed"}))
 async def cmd_done(message: Message, state: FSMContext):
     await state.clear()
     conn = await get_db()
@@ -160,6 +161,7 @@ async def cmd_done(message: Message, state: FSMContext):
 
 
 @router.message(Command("cancelled"))
+@router.message(F.text.in_({"🚫 Отменённые", "🚫 Cancelled"}))
 async def cmd_cancelled(message: Message, state: FSMContext):
     await state.clear()
     conn = await get_db()

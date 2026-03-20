@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from config import TELEGRAM_BOT_TOKEN
+from config import DATABASE_URL, TELEGRAM_BOT_TOKEN
 from database.db import init_db
 from handlers import router
 from scheduler import start_scheduler
@@ -26,6 +26,11 @@ async def main():
         sys.exit(1)
 
     await init_db()
+    if DATABASE_URL:
+        logger.info("Database: PostgreSQL (DATABASE_URL)")
+    else:
+        logger.info("Database: SQLite file")
+
     bot = Bot(
         token=TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

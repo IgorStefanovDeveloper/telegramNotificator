@@ -8,6 +8,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 from config import DEFAULT_TIMEZONE
+from database.connection import SqliteDbConn
 from database.db import init_schema
 from database.events_repo import get_or_create_user, create_event, get_event_by_id
 from database.models import RECURRENCE_WEEKLY
@@ -16,7 +17,8 @@ from utils_timezone import local_to_utc
 
 def _make_get_db(path):
     async def _get_db():
-        return await aiosqlite.connect(path)
+        raw = await aiosqlite.connect(path)
+        return SqliteDbConn(raw)
 
     return _get_db
 

@@ -26,10 +26,7 @@ def _format_datetime(dt_utc, timezone_str: str = DEFAULT_TIMEZONE) -> str:
 async def _get_user_lang(user_db_id: int) -> str:
     conn = await get_db()
     try:
-        cursor = await conn.execute(
-            "SELECT language FROM users WHERE id = ?", (user_db_id,)
-        )
-        row = await cursor.fetchone()
+        row = await conn.fetchone("SELECT language FROM users WHERE id = ?", (user_db_id,))
         return row[0] if row else "ru"
     finally:
         await conn.close()

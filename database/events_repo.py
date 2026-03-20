@@ -2,10 +2,9 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-import aiosqlite
-
 from config import DEFAULT_TIMEZONE, MAX_FUTURE_MONTHS
 from utils_timezone import local_to_utc, utc_now
+from database.connection import DbConn
 from database.models import Event, RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 
 # Explicit column order for SELECT (no telegram_id)
@@ -24,7 +23,7 @@ def _parse_dt(val) -> Optional[datetime]:
         return None
     if isinstance(val, datetime):
         return val
-    return datetime.fromisoformat(val)
+    return datetime.fromisoformat(str(val).replace("Z", "+00:00"))
 
 
 def _row_to_event(row: tuple) -> Event:
@@ -47,26 +46,21 @@ def _row_to_event(row: tuple) -> Event:
     )
 
 
-async def get_or_create_user(conn: aiosqlite.Connection, telegram_id: int) -> int:
+async def get_or_create_user(conn: DbConn, telegram_id: int) -> int:
     """Get user id by telegram_id, create if not exists. Returns user.id (pk)."""
-    cursor = await conn.execute(
-        "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
-    )
-    row = await cursor.fetchone()
+    row = await conn.fetchone("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
     if row:
         return row[0]
     await conn.execute(
         "INSERT INTO users (telegram_id, language, timezone) VALUES (?, 'ru', ?)",
         (telegram_id, DEFAULT_TIMEZONE),
     )
-    await conn.commit()
-    cursor = await conn.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
-    row = await cursor.fetchone()
+    row = await conn.fetchone("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,))
     return row[0]
 
 
 async def create_event(
-    conn: aiosqlite.Connection,
+    conn: DbConn,
     user_id: int,
     title: str,
     event_datetime: datetime,
@@ -77,34 +71,30 @@ async def create_event(
 ) -> int:
     """Create event. event_datetime is local (user TZ); we store UTC."""
     dt_utc = local_to_utc(event_datetime, timezone)
-    cursor = await conn.execute(
+    dt_val = dt_utc.isoformat()
+    return await conn.execute_insert_returning_id(
         """INSERT INTO events (user_id, title, description, event_datetime, timezone, recurrence_type, recurrence_value)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id""",
         (
             user_id,
             title,
             description or "",
-            dt_utc.isoformat(),
+            dt_val,
             timezone,
             recurrence_type,
             recurrence_value or "",
         ),
     )
-    await conn.commit()
-    return cursor.lastrowid
 
 
-async def get_event_by_id(conn: aiosqlite.Connection, event_id: int) -> Optional[Event]:
+async def get_event_by_id(conn: DbConn, event_id: int) -> Optional[Event]:
     """Get event by id."""
-    cursor = await conn.execute(
-        f"SELECT {_EVENT_SELECT} FROM events WHERE id = ?", (event_id,)
-    )
-    row = await cursor.fetchone()
+    row = await conn.fetchone(f"SELECT {_EVENT_SELECT} FROM events WHERE id = ?", (event_id,))
     return _row_to_event(row) if row else None
 
 
 async def get_user_events_upcoming(
-    conn: aiosqlite.Connection,
+    conn: DbConn,
     user_id: int,
     from_dt: datetime,
     to_dt: datetime,
@@ -112,25 +102,26 @@ async def get_user_events_upcoming(
 ) -> list[Event]:
     """Get user events in date range (active only: not cancelled)."""
     extra = "" if include_completed else " AND is_completed = 0"
-    cursor = await conn.execute(
+    from_val = from_dt.isoformat() if isinstance(from_dt, datetime) else from_dt
+    to_val = to_dt.isoformat() if isinstance(to_dt, datetime) else to_dt
+    rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT}
             FROM events
             WHERE user_id = ? AND event_datetime >= ? AND event_datetime <= ?
               AND is_cancelled = 0{extra}
             ORDER BY event_datetime ASC""",
-        (user_id, from_dt.isoformat(), to_dt.isoformat()),
+        (user_id, from_val, to_val),
     )
-    rows = await cursor.fetchall()
     return [_row_to_event(r) for r in rows]
 
 
-async def get_events_to_notify(conn: aiosqlite.Connection, now: datetime = None) -> list[tuple[int, int, Event]]:
+async def get_events_to_notify(conn: DbConn, now: datetime = None) -> list[tuple[int, int, Event]]:
     """First notification: event time in window, never notified, not cancelled/completed."""
     now = now or utc_now()
     window_start = (now - timedelta(minutes=2)).isoformat()
     window_end = now.isoformat()
 
-    cursor = await conn.execute(
+    rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT_E}, u.telegram_id
            FROM events e
            JOIN users u ON e.user_id = u.id
@@ -139,7 +130,6 @@ async def get_events_to_notify(conn: aiosqlite.Connection, now: datetime = None)
              AND e.event_datetime >= ? AND e.event_datetime <= ?""",
         (window_start, window_end),
     )
-    rows = await cursor.fetchall()
     result = []
     for r in rows:
         event = _row_to_event(r[:15])
@@ -148,7 +138,7 @@ async def get_events_to_notify(conn: aiosqlite.Connection, now: datetime = None)
 
 
 async def get_events_to_nudge(
-    conn: aiosqlite.Connection,
+    conn: DbConn,
     now: datetime = None,
     interval_minutes: int = 30,
 ) -> list[tuple[int, int, Event]]:
@@ -156,7 +146,7 @@ async def get_events_to_nudge(
     now = now or utc_now()
     threshold = (now - timedelta(minutes=interval_minutes)).isoformat()
 
-    cursor = await conn.execute(
+    rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT_E}, u.telegram_id
            FROM events e
            JOIN users u ON e.user_id = u.id
@@ -166,7 +156,6 @@ async def get_events_to_nudge(
              AND e.notified_at <= ?""",
         (threshold,),
     )
-    rows = await cursor.fetchall()
     result = []
     for r in rows:
         event = _row_to_event(r[:15])
@@ -174,7 +163,7 @@ async def get_events_to_nudge(
     return result
 
 
-async def advance_recurring_event(conn: aiosqlite.Connection, event: Event) -> bool:
+async def advance_recurring_event(conn: DbConn, event: Event) -> bool:
     """For recurring events, update event_datetime to next occurrence."""
     import calendar
 
@@ -209,68 +198,61 @@ async def advance_recurring_event(conn: aiosqlite.Connection, event: Event) -> b
         "UPDATE events SET event_datetime = ?, notified_at = NULL, nudge_count = 0 WHERE id = ?",
         (new_dt.isoformat(), event.id),
     )
-    await conn.commit()
     return True
 
 
-async def mark_notified(conn: aiosqlite.Connection, event_id: int, at: datetime) -> None:
+async def mark_notified(conn: DbConn, event_id: int, at: datetime) -> None:
     """After first notification: notified_at + nudge_count = 1."""
     await conn.execute(
         "UPDATE events SET notified_at = ?, nudge_count = 1 WHERE id = ?",
         (at.isoformat(), event_id),
     )
-    await conn.commit()
 
 
-async def record_nudge_sent(conn: aiosqlite.Connection, event_id: int, at: datetime) -> None:
+async def record_nudge_sent(conn: DbConn, event_id: int, at: datetime) -> None:
     """Increment nudge_count and refresh notified_at (2nd/3rd reminder)."""
     await conn.execute(
         "UPDATE events SET notified_at = ?, nudge_count = nudge_count + 1 WHERE id = ? AND nudge_count < 3",
         (at.isoformat(), event_id),
     )
-    await conn.commit()
 
 
-async def mark_completed(conn: aiosqlite.Connection, event_id: int) -> bool:
+async def mark_completed(conn: DbConn, event_id: int) -> bool:
     """Mark event as completed."""
     at = utc_now().isoformat()
-    cursor = await conn.execute(
+    n = await conn.execute_rowcount(
         "UPDATE events SET is_completed = 1, completed_at = ?, nudge_count = 0, notified_at = NULL WHERE id = ?",
         (at, event_id),
     )
-    await conn.commit()
-    return cursor.rowcount > 0
+    return n > 0
 
 
-async def mark_cancelled(conn: aiosqlite.Connection, event_id: int) -> bool:
+async def mark_cancelled(conn: DbConn, event_id: int) -> bool:
     """Soft cancel (keeps row for history)."""
     at = utc_now().isoformat()
-    cursor = await conn.execute(
+    n = await conn.execute_rowcount(
         "UPDATE events SET is_cancelled = 1, cancelled_at = ?, nudge_count = 0, notified_at = NULL WHERE id = ?",
         (at, event_id),
     )
-    await conn.commit()
-    return cursor.rowcount > 0
+    return n > 0
 
 
-async def postpone_event(conn: aiosqlite.Connection, event_id: int, hours: int = 1) -> bool:
+async def postpone_event(conn: DbConn, event_id: int, hours: int = 1) -> bool:
     """Postpone event by N hours. Clears notification state for next cycle."""
-    cursor = await conn.execute("SELECT event_datetime FROM events WHERE id = ?", (event_id,))
-    row = await cursor.fetchone()
+    row = await conn.fetchone("SELECT event_datetime FROM events WHERE id = ?", (event_id,))
     if not row:
         return False
-    old_dt = datetime.fromisoformat(row[0])
+    old_dt = datetime.fromisoformat(row[0]) if isinstance(row[0], str) else row[0]
     new_dt = old_dt + timedelta(hours=hours)
     await conn.execute(
         "UPDATE events SET event_datetime = ?, notified_at = NULL, nudge_count = 0 WHERE id = ?",
         (new_dt.isoformat(), event_id),
     )
-    await conn.commit()
     return True
 
 
 async def update_event(
-    conn: aiosqlite.Connection,
+    conn: DbConn,
     event_id: int,
     *,
     title: Optional[str] = None,
@@ -304,39 +286,37 @@ async def update_event(
     if not updates:
         return False
     params.append(event_id)
-    await conn.execute(
-        f"UPDATE events SET {', '.join(updates)} WHERE id = ?", params
+    n = await conn.execute_rowcount(
+        f"UPDATE events SET {', '.join(updates)} WHERE id = ?",
+        tuple(params),
     )
-    await conn.commit()
-    return True
+    return n > 0
 
 
-async def delete_event(conn: aiosqlite.Connection, event_id: int) -> bool:
+async def delete_event(conn: DbConn, event_id: int) -> bool:
     """Delete event."""
-    cursor = await conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
-    await conn.commit()
-    return cursor.rowcount > 0
+    n = await conn.execute_rowcount("DELETE FROM events WHERE id = ?", (event_id,))
+    return n > 0
 
 
-async def get_events_by_user_id(conn: aiosqlite.Connection, user_db_id: int) -> list[Event]:
+async def get_events_by_user_id(conn: DbConn, user_db_id: int) -> list[Event]:
     """Get all active non-completed events for user."""
-    cursor = await conn.execute(
+    rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT}
            FROM events WHERE user_id = ? AND is_completed = 0 AND is_cancelled = 0
            ORDER BY event_datetime ASC""",
         (user_db_id,),
     )
-    rows = await cursor.fetchall()
     return [_row_to_event(r) for r in rows]
 
 
 async def get_user_events_completed(
-    conn: aiosqlite.Connection,
+    conn: DbConn,
     user_id: int,
     limit: int = 50,
 ) -> list[Event]:
     """Completed events, newest first."""
-    cursor = await conn.execute(
+    rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT}
            FROM events
            WHERE user_id = ? AND is_completed = 1 AND is_cancelled = 0
@@ -344,17 +324,16 @@ async def get_user_events_completed(
            LIMIT ?""",
         (user_id, limit),
     )
-    rows = await cursor.fetchall()
     return [_row_to_event(r) for r in rows]
 
 
 async def get_user_events_cancelled(
-    conn: aiosqlite.Connection,
+    conn: DbConn,
     user_id: int,
     limit: int = 50,
 ) -> list[Event]:
     """Cancelled events, newest first."""
-    cursor = await conn.execute(
+    rows = await conn.fetchall(
         f"""SELECT {_EVENT_SELECT}
            FROM events
            WHERE user_id = ? AND is_cancelled = 1
@@ -362,26 +341,20 @@ async def get_user_events_cancelled(
            LIMIT ?""",
         (user_id, limit),
     )
-    rows = await cursor.fetchall()
     return [_row_to_event(r) for r in rows]
 
 
-async def update_user_language(conn: aiosqlite.Connection, telegram_id: int, lang: str) -> None:
+async def update_user_language(conn: DbConn, telegram_id: int, lang: str) -> None:
     """Update user language."""
     await conn.execute("UPDATE users SET language = ? WHERE telegram_id = ?", (lang, telegram_id))
-    await conn.commit()
 
 
-async def update_user_timezone(conn: aiosqlite.Connection, telegram_id: int, tz: str) -> None:
+async def update_user_timezone(conn: DbConn, telegram_id: int, tz: str) -> None:
     """Update user timezone."""
     await conn.execute("UPDATE users SET timezone = ? WHERE telegram_id = ?", (tz, telegram_id))
-    await conn.commit()
 
 
-async def get_user_settings(conn: aiosqlite.Connection, telegram_id: int) -> Optional[tuple[str, str]]:
+async def get_user_settings(conn: DbConn, telegram_id: int) -> Optional[tuple[str, str]]:
     """Get (language, timezone) for user."""
-    cursor = await conn.execute(
-        "SELECT language, timezone FROM users WHERE telegram_id = ?", (telegram_id,)
-    )
-    row = await cursor.fetchone()
+    row = await conn.fetchone("SELECT language, timezone FROM users WHERE telegram_id = ?", (telegram_id,))
     return row if row else None

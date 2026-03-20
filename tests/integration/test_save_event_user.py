@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from database.connection import SqliteDbConn
 from database.db import init_schema
 from database.events_repo import get_user_events_upcoming, get_or_create_user
 
@@ -50,8 +51,10 @@ def _make_get_db(path: Path):
 
 async def _connect(path: Path):
     import aiosqlite
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    return await aiosqlite.connect(path)
+    raw = await aiosqlite.connect(path)
+    return SqliteDbConn(raw)
 
 
 @pytest.fixture

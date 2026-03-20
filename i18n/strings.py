@@ -6,18 +6,21 @@ TEXTS = {
                    "• Добавляй события с датой и временем\n"
                    "• До 3 напоминаний по событию (повторы через 30 мин)\n"
                    "• Повторы: еженедельно или ежемесячно\n"
-                   "• /list — грядущие, /done — выполненные, /cancelled — отменённые\n\n"
-                   "Нажми /help для команд.",
+                   "• Главное меню: грядущие, выполненные, отменённые\n"
+                   "• Или команды: /list, /done, /cancelled\n\n"
+                   "Нажми /help для списка команд.",
         "help": "📋 <b>Команды</b>\n\n"
                 "/new — добавить событие\n"
-                "/list — грядущие события\n"
-                "/done — выполненные\n"
-                "/cancelled — отменённые\n"
+                "/list — грядущие события (кнопка «📅 Список событий»)\n"
+                "/done — выполненные (кнопка «✅ Выполненные»)\n"
+                "/cancelled — отменённые (кнопка «🚫 Отменённые»)\n"
                 "/settings — язык и часовой пояс\n\n"
                 "До 3 напоминаний по событию: вовремя и два повтора через 30 мин, если нет ответа.",
         "menu_main": "Главное меню",
         "btn_new_event": "➕ Новое событие",
         "btn_list_events": "📅 Список событий",
+        "btn_completed_list": "✅ Выполненные",
+        "btn_cancelled_list": "🚫 Отменённые",
         "btn_settings": "⚙️ Настройки",
         "ask_event_title": "Введи название события:",
         "ask_event_date": "Выбери дату:",
@@ -40,7 +43,8 @@ TEXTS = {
         "recurrence_weekly": "Повтор: каждый {day}",
         "recurrence_monthly": "Повтор: каждый месяц, {day}-е число",
         "list_upcoming": "📅 <b>Грядущие события</b> (до 2 лет):\n\n{events}",
-        "list_empty": "Нет запланированных событий.\n\nДобавь новое: /new",
+        "list_empty": "Нет запланированных событий.\n\nДобавь новое: /new\n"
+                      "Выполненные и отменённые — кнопки ниже или /done и /cancelled.",
         "event_item": "• {title} — {datetime}\n  {recurrence_line}",
         "event_item_recurring_weekly": "• Каждый {day} — {title} — {datetime}",
         "event_item_recurring_monthly": "• Каждое {day} число месяца — {title} — {datetime}",
@@ -82,18 +86,21 @@ TEXTS = {
                    "• Add events with date and time\n"
                    "• Up to 3 reminders per event (nudges every 30 min)\n"
                    "• Weekly or monthly repeats\n"
-                   "• /list — upcoming, /done — completed, /cancelled — cancelled\n\n"
+                   "• Main menu: upcoming, completed, cancelled\n"
+                   "• Or commands: /list, /done, /cancelled\n\n"
                    "Press /help for commands.",
         "help": "📋 <b>Commands</b>\n\n"
                 "/new — add event\n"
-                "/list — upcoming events\n"
-                "/done — completed\n"
-                "/cancelled — cancelled\n"
+                "/list — upcoming (button «📅 List events»)\n"
+                "/done — completed (button «✅ Completed»)\n"
+                "/cancelled — cancelled (button «🚫 Cancelled»)\n"
                 "/settings — language and timezone\n\n"
                 "Up to 3 reminders per event: on time plus two nudges 30 min apart if no response.",
         "menu_main": "Main menu",
         "btn_new_event": "➕ New event",
         "btn_list_events": "📅 List events",
+        "btn_completed_list": "✅ Completed",
+        "btn_cancelled_list": "🚫 Cancelled",
         "btn_settings": "⚙️ Settings",
         "ask_event_title": "Enter event title:",
         "ask_event_date": "Select date:",
@@ -116,7 +123,8 @@ TEXTS = {
         "recurrence_weekly": "Repeat: every {day}",
         "recurrence_monthly": "Repeat: monthly on day {day}",
         "list_upcoming": "📅 <b>Upcoming events</b> (up to 2 years):\n\n{events}",
-        "list_empty": "No scheduled events.\n\nAdd new: /new",
+        "list_empty": "No scheduled events.\n\nAdd new: /new\n"
+                      "Completed & cancelled: buttons below or /done and /cancelled.",
         "event_item": "• {title} — {datetime}\n  {recurrence_line}",
         "event_item_recurring_weekly": "• Every {day} — {title} — {datetime}",
         "event_item_recurring_monthly": "• Every {day} of the month — {title} — {datetime}",

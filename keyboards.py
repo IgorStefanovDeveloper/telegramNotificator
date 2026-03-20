@@ -13,6 +13,10 @@ def main_menu(lang: str) -> ReplyKeyboardMarkup:
         KeyboardButton(text=t(lang, "btn_new_event")),
         KeyboardButton(text=t(lang, "btn_list_events")),
     )
+    builder.row(
+        KeyboardButton(text=t(lang, "btn_completed_list")),
+        KeyboardButton(text=t(lang, "btn_cancelled_list")),
+    )
     builder.row(KeyboardButton(text=t(lang, "btn_settings")))
     return builder.as_markup(resize_keyboard=True)
 
