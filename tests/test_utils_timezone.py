@@ -6,6 +6,15 @@ import pytest
 from utils_timezone import local_to_utc, utc_to_local, format_utc_for_display, utc_now
 
 
+def test_local_to_utc_ho_chi_minh():
+    """Vietnam (Nha Trang) UTC+7: 12:00 local = 05:00 UTC."""
+    dt = datetime(2025, 1, 15, 12, 0)
+    result = local_to_utc(dt, "Asia/Ho_Chi_Minh")
+    assert result.hour == 5
+    assert result.minute == 0
+    assert result.day == 15
+
+
 def test_local_to_utc_moscow():
     """14:30 Moscow = 11:30 UTC (Moscow UTC+3)."""
     dt = datetime(2025, 5, 19, 14, 30)

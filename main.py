@@ -6,6 +6,7 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from config import DATABASE_URL, TELEGRAM_BOT_TOKEN
 from database.db import init_db
@@ -18,6 +19,21 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+
+async def setup_bot_commands(bot: Bot) -> None:
+    """Команды в меню Telegram (/) — видны даже без reply-клавиатуры."""
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Меню и кнопки"),
+            BotCommand(command="new", description="Новое событие"),
+            BotCommand(command="list", description="Грядущие"),
+            BotCommand(command="done", description="Выполненные"),
+            BotCommand(command="cancelled", description="Отменённые"),
+            BotCommand(command="settings", description="Настройки"),
+            BotCommand(command="help", description="Справка"),
+        ]
+    )
 
 
 async def main():
@@ -35,6 +51,8 @@ async def main():
         token=TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    await setup_bot_commands(bot)
+
     dp = Dispatcher()
     dp.include_router(router)
 

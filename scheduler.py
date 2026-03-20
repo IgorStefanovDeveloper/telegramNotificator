@@ -4,7 +4,7 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from config import DEFAULT_TIMEZONE
+from config import DEFAULT_TIMEZONE, timezone_display
 from database.db import get_db
 from database.events_repo import (
     get_events_to_notify,
@@ -35,7 +35,8 @@ async def _get_user_lang(user_db_id: int) -> str:
 async def _send_one_notification(bot, telegram_id: int, user_db_id: int, event, now: datetime) -> None:
     lang = await _get_user_lang(user_db_id)
     dt_str = _format_datetime(event.event_datetime, event.timezone)
-    text = t(lang, "notification", title=event.title, datetime=dt_str)
+    zone_hint = t(lang, "notification_zone_hint", zone=timezone_display(lang, event.timezone))
+    text = t(lang, "notification", title=event.title, datetime=dt_str, zone_hint=zone_hint)
     kb = notification_actions_kb(event.id, lang)
     await bot.send_message(
         telegram_id,
@@ -60,7 +61,8 @@ async def _send_one_notification(bot, telegram_id: int, user_db_id: int, event, 
 async def _send_nudge(bot, telegram_id: int, user_db_id: int, event, now: datetime) -> None:
     lang = await _get_user_lang(user_db_id)
     dt_str = _format_datetime(event.event_datetime, event.timezone)
-    text = t(lang, "notification_nudge", title=event.title, datetime=dt_str)
+    zone_hint = t(lang, "notification_zone_hint", zone=timezone_display(lang, event.timezone))
+    text = t(lang, "notification_nudge", title=event.title, datetime=dt_str, zone_hint=zone_hint)
     kb = notification_actions_kb(event.id, lang)
     await bot.send_message(
         telegram_id,

@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
-from config import DEFAULT_TIMEZONE
+from config import DEFAULT_TIMEZONE, timezone_display
 from database.db import get_db
 from database.events_repo import (
     get_or_create_user,
@@ -64,7 +64,11 @@ async def cmd_help(message: Message):
     conn = await get_db()
     try:
         lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", None)
-        await message.answer(t(lang, "help"), parse_mode="HTML")
+        await message.answer(
+            t(lang, "help"),
+            parse_mode="HTML",
+            reply_markup=main_menu(lang),
+        )
     finally:
         await conn.close()
 
@@ -78,7 +82,7 @@ async def cmd_settings(message: Message, state: FSMContext):
         await get_or_create_user(conn, message.from_user.id)
         lang, tz = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
         lang_display = "Русский" if lang == "ru" else "English"
-        tz_short = tz.split("/")[-1].replace("_", " ")
+        tz_short = timezone_display(lang, tz)
         await message.answer(
             t(lang, "settings", language=lang_display, timezone=tz_short),
             reply_markup=settings_kb(lang),
@@ -104,7 +108,11 @@ async def cmd_list(message: Message, state: FSMContext):
         to_dt = now + timedelta(days=30 * MAX_FUTURE_MONTHS)
         events = await get_user_events_upcoming(conn, user_db_id, now, to_dt)
         if not events:
-            await message.answer(t(lang, "list_empty"), parse_mode="HTML")
+            await message.answer(
+                t(lang, "list_empty"),
+                parse_mode="HTML",
+                reply_markup=main_menu(lang),
+            )
             return
         lines = []
         for ev in events:
@@ -121,12 +129,18 @@ async def cmd_list(message: Message, state: FSMContext):
             else:
                 rec_line = _recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or "")
                 lines.append(t(lang, "event_item", title=ev.title, datetime=dt_str, recurrence_line=rec_line))
-        text = t(lang, "list_upcoming", events="\n".join(lines))
+        text = t(
+            lang,
+            "list_upcoming",
+            tz_intro=t(lang, "list_tz_intro"),
+            events="\n".join(lines),
+        )
         await message.answer(
             text,
             parse_mode="HTML",
             reply_markup=list_events_kb(events, lang),
         )
+        await message.answer(t(lang, "menu_restore_hint"), reply_markup=main_menu(lang))
     finally:
         await conn.close()
 
@@ -141,7 +155,11 @@ async def cmd_done(message: Message, state: FSMContext):
         lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
         events = await get_user_events_completed(conn, user_db_id, limit=30)
         if not events:
-            await message.answer(t(lang, "list_history_empty"), parse_mode="HTML")
+            await message.answer(
+                t(lang, "list_history_empty"),
+                parse_mode="HTML",
+                reply_markup=main_menu(lang),
+            )
             return
         lines = []
         for ev in events:
@@ -155,7 +173,11 @@ async def cmd_done(message: Message, state: FSMContext):
                     recurrence_line=_recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or ""),
                 )
             )
-        await message.answer(t(lang, "list_completed", events="\n".join(lines)), parse_mode="HTML")
+        await message.answer(
+            t(lang, "list_completed", events="\n".join(lines)),
+            parse_mode="HTML",
+            reply_markup=main_menu(lang),
+        )
     finally:
         await conn.close()
 
@@ -170,7 +192,11 @@ async def cmd_cancelled(message: Message, state: FSMContext):
         lang, _ = await get_user_settings(conn, message.from_user.id) or ("ru", DEFAULT_TIMEZONE)
         events = await get_user_events_cancelled(conn, user_db_id, limit=30)
         if not events:
-            await message.answer(t(lang, "list_history_empty"), parse_mode="HTML")
+            await message.answer(
+                t(lang, "list_history_empty"),
+                parse_mode="HTML",
+                reply_markup=main_menu(lang),
+            )
             return
         lines = []
         for ev in events:
@@ -184,6 +210,10 @@ async def cmd_cancelled(message: Message, state: FSMContext):
                     recurrence_line=_recurrence_text(lang, ev.recurrence_type, ev.recurrence_value or ""),
                 )
             )
-        await message.answer(t(lang, "list_cancelled", events="\n".join(lines)), parse_mode="HTML")
+        await message.answer(
+            t(lang, "list_cancelled", events="\n".join(lines)),
+            parse_mode="HTML",
+            reply_markup=main_menu(lang),
+        )
     finally:
         await conn.close()

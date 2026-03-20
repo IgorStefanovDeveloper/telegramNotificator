@@ -2,23 +2,28 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+from config import timezone_labels_for_lang
 from i18n import t
 from database.models import RECURRENCE_NONE, RECURRENCE_MONTHLY, RECURRENCE_WEEKLY
 
 
 def main_menu(lang: str) -> ReplyKeyboardMarkup:
-    """Main menu with reply keyboard."""
-    builder = ReplyKeyboardBuilder()
-    builder.row(
-        KeyboardButton(text=t(lang, "btn_new_event")),
-        KeyboardButton(text=t(lang, "btn_list_events")),
+    """Reply keyboard: 5 кнопок (явная сетка + is_persistent — не теряется в клиенте)."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=t(lang, "btn_new_event")),
+                KeyboardButton(text=t(lang, "btn_list_events")),
+            ],
+            [
+                KeyboardButton(text=t(lang, "btn_completed_list")),
+                KeyboardButton(text=t(lang, "btn_cancelled_list")),
+            ],
+            [KeyboardButton(text=t(lang, "btn_settings"))],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
     )
-    builder.row(
-        KeyboardButton(text=t(lang, "btn_completed_list")),
-        KeyboardButton(text=t(lang, "btn_cancelled_list")),
-    )
-    builder.row(KeyboardButton(text=t(lang, "btn_settings")))
-    return builder.as_markup(resize_keyboard=True)
 
 
 def recurrence_kb(lang: str) -> InlineKeyboardMarkup:
@@ -137,12 +142,19 @@ def list_events_kb(events: list, lang: str) -> InlineKeyboardMarkup:
 
 
 def settings_kb(lang: str) -> InlineKeyboardMarkup:
-    """Language selection."""
+    """Язык + часовой пояс."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=t(lang, "btn_lang_ru"), callback_data="set:lang:ru"),
         InlineKeyboardButton(text=t(lang, "btn_lang_en"), callback_data="set:lang:en"),
     )
+    for idx, (_iana, label) in enumerate(timezone_labels_for_lang(lang)):
+        builder.row(
+            InlineKeyboardButton(
+                text=f"🌐 {label}",
+                callback_data=f"set:tz:{idx}",
+            )
+        )
     return builder.as_markup()
 
 

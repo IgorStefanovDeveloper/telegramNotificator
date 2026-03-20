@@ -11,7 +11,7 @@ from aiogram_calendar.schemas import SimpleCalAct
 
 logger = logging.getLogger(__name__)
 
-from config import DEFAULT_TIMEZONE
+from config import DEFAULT_TIMEZONE, timezone_display
 from database.db import get_db
 from utils_timezone import format_utc_for_display, local_to_utc, utc_now
 from database.events_repo import (
@@ -67,6 +67,13 @@ def _parse_time(text: str) -> tuple[int, int] | None:
         return None
 
 
+def _callback_time_payload(data: str) -> str:
+    """time:08:00 → 08:00; time:manual → manual (split(':')[1] would break on HH:MM)."""
+    if not data.startswith("time:"):
+        return ""
+    return data[5:]
+
+
 def _parse_datetime(text: str) -> datetime | None:
     """Parse DD.MM.YYYY HH:MM"""
     try:
@@ -114,8 +121,9 @@ async def process_title(message: Message, state: FSMContext):
     btn_text = "✏️ Ввести дату вручную" if lang == "ru" else "✏️ Enter date manually"
     manual_btn = InlineKeyboardButton(text=btn_text, callback_data="cal:manual")
     combined = InlineKeyboardMarkup(inline_keyboard=markup.inline_keyboard + [[manual_btn]])
+    tz = data.get("timezone", DEFAULT_TIMEZONE)
     await message.answer(
-        t(lang, "ask_event_date"),
+        t(lang, "ask_event_date") + "\n\n" + t(lang, "tz_events_hint", zone=timezone_display(lang, tz)),
         reply_markup=combined,
     )
 
@@ -137,7 +145,7 @@ async def process_datetime(message: Message, state: FSMContext):
     await state.update_data(event_datetime=dt)
     await state.set_state(AddEventStates.recurrence)
     await message.answer(
-        t(lang, "ask_recurrence"),
+        t(lang, "ask_recurrence") + "\n" + t(lang, "tz_events_hint_short", zone=timezone_display(lang, timezone)),
         reply_markup=recurrence_kb(lang),
     )
 
@@ -158,8 +166,9 @@ async def cb_calendar_manual(cb: CallbackQuery, state: FSMContext):
         return
     data = await state.get_data()
     lang = data.get("lang", "ru")
+    tz = data.get("edit_tz") or data.get("timezone", DEFAULT_TIMEZONE)
     await cb.message.edit_text(
-        t(lang, "ask_event_datetime"),
+        t(lang, "ask_event_datetime") + "\n\n" + t(lang, "tz_events_hint", zone=timezone_display(lang, tz)),
         reply_markup=datetime_calendar_kb(lang),
     )
 
@@ -205,8 +214,9 @@ async def cb_calendar_select_add(cb: CallbackQuery, callback_data: SimpleCalenda
     if selected and date:
         await state.update_data(calendar_date=date)
         await state.set_state(AddEventStates.datetime_time)
+        tz = data.get("timezone", DEFAULT_TIMEZONE)
         await cb.message.edit_text(
-            t(lang, "ask_event_time"),
+            t(lang, "ask_event_time") + "\n" + t(lang, "tz_events_hint_short", zone=timezone_display(lang, tz)),
             reply_markup=time_picker_kb(lang),
         )
     elif callback_data.act == SimpleCalAct.cancel:
@@ -223,8 +233,9 @@ async def cb_calendar_select_edit(cb: CallbackQuery, callback_data: SimpleCalend
     if selected and date:
         await state.update_data(calendar_date=date)
         await state.set_state(EditEventStates.edit_datetime_time)
+        tz = data.get("edit_tz") or data.get("timezone", DEFAULT_TIMEZONE)
         await cb.message.edit_text(
-            t(lang, "ask_event_time"),
+            t(lang, "ask_event_time") + "\n" + t(lang, "tz_events_hint_short", zone=timezone_display(lang, tz)),
             reply_markup=time_picker_kb(lang),
         )
     elif callback_data.act == SimpleCalAct.cancel:
@@ -235,7 +246,9 @@ async def cb_calendar_select_edit(cb: CallbackQuery, callback_data: SimpleCalend
 async def cb_time_picker_edit(cb: CallbackQuery, state: FSMContext):
     """Handle time picker when editing event."""
     await cb.answer()
-    value = cb.data.split(":")[1]
+    value = _callback_time_payload(cb.data)
+    if not value:
+        return
     data = await state.get_data()
     lang = data.get("lang", "ru")
     event_id = data.get("event_id")
@@ -244,8 +257,13 @@ async def cb_time_picker_edit(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
     if value == "manual":
+        tz = data.get("edit_tz") or data.get("timezone", DEFAULT_TIMEZONE)
         await cb.message.edit_text(
-            t(lang, "ask_event_time") + "\n\n" + ("Например: 14:30" if lang == "ru" else "E.g.: 14:30"),
+            t(lang, "ask_event_time")
+            + "\n"
+            + t(lang, "tz_events_hint_short", zone=timezone_display(lang, tz))
+            + "\n\n"
+            + ("Например: 14:30" if lang == "ru" else "E.g.: 14:30"),
             reply_markup=cancel_kb(lang),
         )
         return
@@ -275,7 +293,9 @@ async def cb_time_picker_edit(cb: CallbackQuery, state: FSMContext):
 async def cb_time_picker(cb: CallbackQuery, state: FSMContext):
     """Handle time picker: quick select or manual."""
     await cb.answer()
-    value = cb.data.split(":")[1]
+    value = _callback_time_payload(cb.data)
+    if not value:
+        return
     data = await state.get_data()
     lang = data.get("lang", "ru")
     calendar_date = data.get("calendar_date")
@@ -283,8 +303,13 @@ async def cb_time_picker(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
     if value == "manual":
+        tz = data.get("timezone", DEFAULT_TIMEZONE)
         await cb.message.edit_text(
-            t(lang, "ask_event_time") + "\n\n" + ("Например: 14:30" if lang == "ru" else "E.g.: 14:30"),
+            t(lang, "ask_event_time")
+            + "\n"
+            + t(lang, "tz_events_hint_short", zone=timezone_display(lang, tz))
+            + "\n\n"
+            + ("Например: 14:30" if lang == "ru" else "E.g.: 14:30"),
             reply_markup=cancel_kb(lang),
         )
         return
@@ -301,7 +326,7 @@ async def cb_time_picker(cb: CallbackQuery, state: FSMContext):
     await state.update_data(event_datetime=dt)
     await state.set_state(AddEventStates.recurrence)
     await cb.message.edit_text(
-        t(lang, "ask_recurrence"),
+        t(lang, "ask_recurrence") + "\n" + t(lang, "tz_events_hint_short", zone=timezone_display(lang, timezone)),
         reply_markup=recurrence_kb(lang),
     )
 
@@ -329,8 +354,9 @@ async def process_datetime_time(message: Message, state: FSMContext):
         return
     await state.update_data(event_datetime=dt)
     await state.set_state(AddEventStates.recurrence)
+    tz = data.get("timezone", DEFAULT_TIMEZONE)
     await message.answer(
-        t(lang, "ask_recurrence"),
+        t(lang, "ask_recurrence") + "\n" + t(lang, "tz_events_hint_short", zone=timezone_display(lang, tz)),
         reply_markup=recurrence_kb(lang),
     )
 
@@ -383,7 +409,12 @@ async def _save_event(message, state: FSMContext, rec_type: str, rec_value: str 
         rec_text = _recurrence_text(lang, rec_type, rec_value or "")
         dt_str = event_datetime.strftime("%d.%m.%Y %H:%M")
         summary = t(lang, "event_summary", title=title, datetime=dt_str, recurrence=rec_text)
-        text = t(lang, "event_created", summary=summary)
+        tz_note = t(
+            lang,
+            "event_created_tz_note",
+            zone=timezone_display(lang, timezone),
+        )
+        text = t(lang, "event_created", summary=summary, tz_note=tz_note)
         await state.clear()
         if hasattr(message, "edit_text"):
             await message.edit_text(text, parse_mode="HTML")
@@ -486,10 +517,15 @@ async def cb_edit_field(cb: CallbackQuery, state: FSMContext):
             )
         elif field == "datetime":
             await state.set_state(EditEventStates.edit_datetime)
+            await state.update_data(edit_tz=event.timezone)
             dt_str = format_utc_for_display(event.event_datetime, event.timezone)
             hint = t(lang, "edit_current_datetime", datetime=dt_str)
             await cb.message.edit_text(
-                t(lang, "ask_event_datetime") + "\n\n" + hint,
+                t(lang, "ask_event_datetime")
+                + "\n\n"
+                + t(lang, "tz_events_hint", zone=timezone_display(lang, event.timezone))
+                + "\n\n"
+                + hint,
                 reply_markup=datetime_calendar_kb(lang),
             )
         elif field == "recurrence":

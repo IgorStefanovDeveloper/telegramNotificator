@@ -2,7 +2,7 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 
-from config import DEFAULT_TIMEZONE
+from config import DEFAULT_TIMEZONE, USER_SELECTABLE_TIMEZONES, timezone_display
 from database.db import get_db
 from database.events_repo import (
     get_event_by_id,
@@ -13,10 +13,11 @@ from database.events_repo import (
     get_or_create_user,
     get_user_settings,
     update_user_language,
+    update_user_timezone,
 )
 from database.models import RECURRENCE_NONE
 from i18n import t
-from keyboards import settings_kb
+from keyboards import main_menu, settings_kb
 
 router = Router()
 
@@ -132,12 +133,44 @@ async def cb_set_lang(cb: CallbackQuery):
         await get_or_create_user(conn, cb.from_user.id)
         await update_user_language(conn, cb.from_user.id, lang)
         _, tz = await get_user_settings(conn, cb.from_user.id) or ("ru", DEFAULT_TIMEZONE)
-        tz_short = tz.split("/")[-1].replace("_", " ")
+        tz_short = timezone_display(lang, tz)
         lang_display = "Русский" if lang == "ru" else "English"
         await cb.message.edit_text(
             t(lang, "settings", language=lang_display, timezone=tz_short),
             reply_markup=settings_kb(lang),
             parse_mode="HTML",
+        )
+        # Reply-клавиатуру нельзя «отредактировать» — присылаем новую с текстом кнопок на выбранном языке
+        await cb.message.answer(t(lang, "lang_changed"), reply_markup=main_menu(lang))
+    finally:
+        await conn.close()
+
+
+@router.callback_query(F.data.startswith("set:tz:"))
+async def cb_set_timezone(cb: CallbackQuery):
+    await cb.answer()
+    try:
+        idx = int(cb.data.split(":")[2])
+    except (IndexError, ValueError):
+        return
+    if idx < 0 or idx >= len(USER_SELECTABLE_TIMEZONES):
+        return
+    tz_iana = USER_SELECTABLE_TIMEZONES[idx][0]
+    conn = await get_db()
+    try:
+        await get_or_create_user(conn, cb.from_user.id)
+        await update_user_timezone(conn, cb.from_user.id, tz_iana)
+        lang, tz = await get_user_settings(conn, cb.from_user.id) or ("ru", DEFAULT_TIMEZONE)
+        tz_short = timezone_display(lang, tz)
+        lang_display = "Русский" if lang == "ru" else "English"
+        await cb.message.edit_text(
+            t(lang, "settings", language=lang_display, timezone=tz_short),
+            reply_markup=settings_kb(lang),
+            parse_mode="HTML",
+        )
+        await cb.message.answer(
+            t(lang, "timezone_changed"),
+            reply_markup=main_menu(lang),
         )
     finally:
         await conn.close()
